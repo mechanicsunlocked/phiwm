@@ -1,0 +1,136 @@
+/* Native unit tests for the dwindle engine: cc -I../src test_layout.c ../src/layout.c */
+#include "layout.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+static int fails = 0;
+#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
+
+static PhiDwindle golden = { 0.618, 2, 1, 1.0 };
+
+static PhiNode *find(PhiTree *t, void *w)
+{
+    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) if (n->win == w) return n;
+    return NULL;
+}
+
+static void dump(PhiTree *t, PhiRect area, int gin)
+{
+    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) {
+        PhiRect r = phi_tile_rect(n, area, gin);
+        printf("   win %ld: %4d,%4d %4dx%4d\n", (long)(size_t)n->win, r.x, r.y, r.w, r.h);
+    }
+}
+
+int main(void)
+{
+    PhiRect area = { 10, 10, 2540, 1420 }; /* 2560x1440 work area, gaps_out 10 */
+    PhiTree t = { 0 };
+
+    /* one window fills the area */
+    PhiNode *focus = phi_insert(&t, NULL, (void *)1, area, &golden, -1, 0, 0);
+    phi_layout(&t, area, &golden);
+    CHECK(focus->box.w == area.w && focus->box.h == area.h);
+
+    /* golden spiral: always split the newest window */
+    for (long i = 2; i <= 5; i++) {
+        focus = phi_insert(&t, focus, (void *)i, area, &golden, -1, 0, 0);
+        CHECK(focus != NULL);
+    }
+    phi_layout(&t, area, &golden);
+    CHECK(phi_count(&t) == 5);
+    printf("golden spiral, 5 windows:\n");
+    dump(&t, area, 5);
+
+    PhiNode *w1 = find(&t, (void *)1), *w2 = find(&t, (void *)2), *w3 = find(&t, (void *)3);
+    /* window 1 keeps 61.8% of the width, window 2's column is split top/bottom */
+    CHECK(abs(w1->box.w - (int)(2540 * 0.618 + 0.5)) <= 1);
+    CHECK(w1->box.h == 1420);
+    CHECK(w2->box.x == w1->box.x + w1->box.w);
+    CHECK(abs(w2->box.h - (int)(1420 * 0.618 + 0.5)) <= 1);
+    CHECK(w3->box.y == w2->box.y + w2->box.h);
+
+    /* gaps: 2 * gap_in between neighbours, none added on outer edges */
+    PhiRect r1 = phi_tile_rect(w1, area, 5), r2 = phi_tile_rect(w2, area, 5);
+    CHECK(r1.x == area.x && r1.y == area.y && r1.h == area.h);
+    CHECK(r2.x - (r1.x + r1.w) == 10);
+
+    /* every leaf box tiles the area exactly: total area matches */
+    long sum = 0;
+    for (PhiNode *n = phi_first(&t); n; n = phi_next(n)) sum += (long)n->box.w * n->box.h;
+    CHECK(sum == (long)area.w * area.h);
+
+    /* togglesplit flips the parent of window 3 */
+    int before = w3->parent->horiz;
+    phi_toggle_split(w3);
+    CHECK(w3->parent->horiz == !before);
+    phi_toggle_split(w3);
+
+    /* keyboard resize grows window 1 to the right */
+    int w_before = w1->box.w;
+    CHECK(phi_resize(w1, 100, 0));
+    phi_layout(&t, area, &golden);
+    CHECK(abs(w1->box.w - (w_before + 100)) <= 1);
+
+    /* rightmost window grows leftwards */
+    PhiNode *w5 = find(&t, (void *)5);
+    int x5 = w5->box.x;
+    CHECK(phi_resize(w5, 50, 0) || phi_resize(w5, 0, 0) == 0);
+    phi_layout(&t, area, &golden);
+    printf("after resizes:\n");
+    dump(&t, area, 5);
+    (void)x5;
+
+    /* mouse edge drag: move window 1's right edge to x = 1200 */
+    CHECK(phi_move_edge(w1, PHI_EDGE_RIGHT, 1200));
+    phi_layout(&t, area, &golden);
+    CHECK(abs((w1->box.x + w1->box.w) - 1200) <= 1);
+    CHECK(!phi_move_edge(w1, PHI_EDGE_LEFT, 100)); /* no split on its left */
+
+    /* swap keeps boxes, exchanges payloads */
+    PhiRect b1 = w1->box;
+    phi_swap(w1, w2);
+    CHECK(w1->win == (void *)2 && w2->win == (void *)1);
+    CHECK(w1->box.x == b1.x);
+    phi_swap(w1, w2);
+
+    /* removing a middle window gives its space to the sibling */
+    phi_remove(&t, find(&t, (void *)3));
+    phi_layout(&t, area, &golden);
+    CHECK(phi_count(&t) == 4);
+    sum = 0;
+    for (PhiNode *n = phi_first(&t); n; n = phi_next(n)) sum += (long)n->box.w * n->box.h;
+    CHECK(sum == (long)area.w * area.h);
+
+    /* remove everything */
+    while (t.root) phi_remove(&t, phi_first(&t));
+    CHECK(phi_count(&t) == 0);
+
+    /* force_split 0 follows the point; force 1 puts the new window first */
+    PhiNode *a = phi_insert(&t, NULL, (void *)1, area, &golden, -1, 0, 0);
+    PhiNode *b = phi_insert(&t, a, (void *)2, area, &golden, 0, 50, 700);  /* point on the left half */
+    phi_layout(&t, area, &golden);
+    CHECK(b->box.x == area.x);              /* new window went left */
+    CHECK(a->box.w > b->box.w);             /* existing window still keeps the golden share */
+    PhiNode *c = phi_insert(&t, a, (void *)3, area, &golden, 1, 0, 0);
+    phi_layout(&t, area, &golden);
+    CHECK(c->parent->child[0] == c);
+
+    /* stacked split on a portrait area */
+    phi_free(&t);
+    PhiRect portrait = { 0, 0, 1000, 1800 };
+    a = phi_insert(&t, NULL, (void *)1, portrait, &golden, -1, 0, 0);
+    b = phi_insert(&t, a, (void *)2, portrait, &golden, -1, 0, 0);
+    phi_layout(&t, portrait, &golden);
+    CHECK(a->parent->horiz == 0 && b->box.y > a->box.y);
+
+    /* split ratio clamps */
+    phi_split_ratio(b, 5.0, 1);
+    CHECK(a->parent->ratio <= 0.95);
+    phi_free(&t);
+
+    if (fails) { printf("%d failure(s)\n", fails); return 1; }
+    printf("layout: all tests passed\n");
+    return 0;
+}

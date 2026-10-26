@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+PackageIdentifier: @ID@
+PackageVersion: @VERSION@
+PackageLocale: en-US
+Publisher: @PUBLISHER@
+PublisherUrl: @REPO_URL@
+PublisherSupportUrl: @REPO_URL@/issues
+PackageName: phiwm
+PackageUrl: @REPO_URL@
+License: MIT
+LicenseUrl: @REPO_URL@/blob/main/LICENSE
+ShortDescription: Dwindle tiling window manager for Windows 11 with Hyprland-style config and golden-ratio splits.
+Description: |-
+  phiwm tiles windows the way Hyprland's dwindle layout does: every new window splits the
+  focused one, by default at the golden ratio. It reads a hyprland.conf-style config, has
+  workspaces 1-10 per monitor, native Windows 11 border colors, and a single small exe with
+  no services or helper daemons.
+Tags:
+- tiling
+- tiling-window-manager
+- window-manager
+- hyprland
+- dwindle
+- keyboard
+ReleaseNotesUrl: @REPO_URL@/releases/tag/v@VERSION@
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0

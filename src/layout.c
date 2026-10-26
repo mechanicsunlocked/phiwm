@@ -1,0 +1,236 @@
+/* phiwm — dwindle layout engine. See layout.h. */
+#include "layout.h"
+#include <stdlib.h>
+
+#define RATIO_MIN 0.05
+#define RATIO_MAX 0.95
+
+static double clampd(double v, double lo, double hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+static int is_leaf(const PhiNode *n) { return n->child[0] == NULL; }
+
+static void replace_in_parent(PhiTree *t, PhiNode *old, PhiNode *nu)
+{
+    PhiNode *p = old->parent;
+    nu->parent = p;
+    if (!p) t->root = nu;
+    else if (p->child[0] == old) p->child[0] = nu;
+    else p->child[1] = nu;
+}
+
+static int want_horiz(PhiRect b, const PhiDwindle *cfg)
+{
+    double m = cfg && cfg->width_mult > 0 ? cfg->width_mult : 1.0;
+    return (double)b.w >= (double)b.h * m;
+}
+
+static void layout_node(PhiNode *n, PhiRect box, const PhiDwindle *cfg)
+{
+    n->box = box;
+    if (is_leaf(n)) return;
+    if (!n->locked) n->horiz = want_horiz(box, cfg);
+    PhiRect a = box, b = box;
+    if (n->horiz) {
+        a.w = (int)(box.w * n->ratio + 0.5);
+        b.x = box.x + a.w;
+        b.w = box.w - a.w;
+    } else {
+        a.h = (int)(box.h * n->ratio + 0.5);
+        b.y = box.y + a.h;
+        b.h = box.h - a.h;
+    }
+    layout_node(n->child[0], a, cfg);
+    layout_node(n->child[1], b, cfg);
+}
+
+void phi_layout(PhiTree *t, PhiRect area, const PhiDwindle *cfg)
+{
+    if (t->root) layout_node(t->root, area, cfg);
+}
+
+PhiNode *phi_first(const PhiTree *t)
+{
+    PhiNode *n = t->root;
+    while (n && !is_leaf(n)) n = n->child[0];
+    return n;
+}
+
+PhiNode *phi_last(const PhiTree *t)
+{
+    PhiNode *n = t->root;
+    while (n && !is_leaf(n)) n = n->child[1];
+    return n;
+}
+
+PhiNode *phi_next(const PhiNode *leaf)
+{
+    const PhiNode *n = leaf;
+    while (n->parent && n->parent->child[1] == n) n = n->parent;
+    if (!n->parent) return NULL;
+    PhiNode *m = n->parent->child[1];
+    while (!is_leaf(m)) m = m->child[0];
+    return m;
+}
+
+int phi_count(const PhiTree *t)
+{
+    int c = 0;
+    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) c++;
+    return c;
+}
+
+PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
+                    const PhiDwindle *cfg, int force, int px, int py)
+{
+    PhiNode *leaf = calloc(1, sizeof *leaf);
+    if (!leaf) return NULL;
+    leaf->win = win;
+    if (!t->root) { t->root = leaf; leaf->box = area; return leaf; }
+
+    if (!target || !is_leaf(target)) target = phi_last(t);
+    phi_layout(t, area, cfg);
+
+    PhiNode *split = calloc(1, sizeof *split);
+    if (!split) { free(leaf); return NULL; }
+    PhiRect b = target->box;
+    replace_in_parent(t, target, split);
+    split->box = b;
+    split->horiz = want_horiz(b, cfg);
+    split->locked = cfg ? cfg->preserve_split : 1;
+
+    int mode = force >= 0 ? force : (cfg ? cfg->force_split : 2);
+    int new_first;
+    if (mode == 1) new_first = 1;
+    else if (mode == 2) new_first = 0;
+    else {
+        int inside = px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h;
+        if (!inside) new_first = 0;
+        else if (split->horiz) new_first = px < b.x + b.w / 2;
+        else new_first = py < b.y + b.h / 2;
+    }
+
+    double keep = clampd(cfg ? cfg->ratio : 0.5, RATIO_MIN, RATIO_MAX);
+    split->child[new_first ? 0 : 1] = leaf;
+    split->child[new_first ? 1 : 0] = target;
+    split->ratio = new_first ? 1.0 - keep : keep;
+    leaf->parent = split;
+    target->parent = split;
+    phi_layout(t, area, cfg);
+    return leaf;
+}
+
+void phi_remove(PhiTree *t, PhiNode *leaf)
+{
+    if (!leaf) return;
+    PhiNode *p = leaf->parent;
+    if (!p) {
+        if (t->root == leaf) t->root = NULL;
+        free(leaf);
+        return;
+    }
+    PhiNode *sib = p->child[0] == leaf ? p->child[1] : p->child[0];
+    replace_in_parent(t, p, sib);
+    free(p);
+    free(leaf);
+}
+
+PhiRect phi_tile_rect(const PhiNode *leaf, PhiRect area, int gap_in)
+{
+    PhiRect r = leaf->box;
+    int l = r.x, tp = r.y, rt = r.x + r.w, bt = r.y + r.h;
+    if (l > area.x) l += gap_in;
+    if (tp > area.y) tp += gap_in;
+    if (rt < area.x + area.w) rt -= gap_in;
+    if (bt < area.y + area.h) bt -= gap_in;
+    r.x = l; r.y = tp;
+    r.w = rt - l < 1 ? 1 : rt - l;
+    r.h = bt - tp < 1 ? 1 : bt - tp;
+    return r;
+}
+
+void phi_toggle_split(PhiNode *leaf)
+{
+    if (!leaf || !leaf->parent) return;
+    leaf->parent->horiz = !leaf->parent->horiz;
+    leaf->parent->locked = 1;
+}
+
+void phi_swap(PhiNode *a, PhiNode *b)
+{
+    if (!a || !b || a == b) return;
+    void *w = a->win; a->win = b->win; b->win = w;
+}
+
+/* Closest ancestor split with the given orientation where the leaf sits on
+ * side `side` (0 = first child, 1 = second child). */
+static PhiNode *ancestor(PhiNode *leaf, int horiz, int side)
+{
+    PhiNode *n = leaf;
+    while (n->parent) {
+        PhiNode *p = n->parent;
+        int s = p->child[0] == n ? 0 : 1;
+        if (p->horiz == horiz && s == side) return p;
+        n = p;
+    }
+    return NULL;
+}
+
+static int nudge(PhiNode *leaf, int horiz, int delta)
+{
+    if (!delta) return 0;
+    /* Prefer moving the edge on the far side (right / bottom), like Hyprland. */
+    PhiNode *p = ancestor(leaf, horiz, 0);
+    int sign = 1;
+    if (!p) { p = ancestor(leaf, horiz, 1); sign = -1; }
+    if (!p) return 0;
+    int len = horiz ? p->box.w : p->box.h;
+    if (len <= 0) return 0;
+    double nr = clampd(p->ratio + sign * (double)delta / len, RATIO_MIN, RATIO_MAX);
+    if (nr == p->ratio) return 0;
+    p->ratio = nr;
+    return 1;
+}
+
+int phi_resize(PhiNode *leaf, int dx, int dy)
+{
+    if (!leaf) return 0;
+    int a = nudge(leaf, 1, dx);
+    int b = nudge(leaf, 0, dy);
+    return a || b;
+}
+
+int phi_move_edge(PhiNode *leaf, int edge, int coord)
+{
+    if (!leaf) return 0;
+    int horiz = edge == PHI_EDGE_LEFT || edge == PHI_EDGE_RIGHT;
+    int side = (edge == PHI_EDGE_LEFT || edge == PHI_EDGE_TOP) ? 1 : 0;
+    PhiNode *p = ancestor(leaf, horiz, side);
+    if (!p) return 0;
+    int start = horiz ? p->box.x : p->box.y;
+    int len = horiz ? p->box.w : p->box.h;
+    if (len <= 0) return 0;
+    p->ratio = clampd((double)(coord - start) / len, RATIO_MIN, RATIO_MAX);
+    return 1;
+}
+
+int phi_split_ratio(PhiNode *leaf, double value, int exact)
+{
+    if (!leaf || !leaf->parent) return 0;
+    PhiNode *p = leaf->parent;
+    p->ratio = clampd(exact ? value : p->ratio + value, RATIO_MIN, RATIO_MAX);
+    return 1;
+}
+
+static void free_node(PhiNode *n)
+{
+    if (!n) return;
+    free_node(n->child[0]);
+    free_node(n->child[1]);
+    free(n);
+}
+
+void phi_free(PhiTree *t)
+{
+    free_node(t->root);
+    t->root = NULL;
+}
