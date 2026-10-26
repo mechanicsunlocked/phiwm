@@ -55,22 +55,6 @@ void wide_from_utf8(const char *s, wchar_t *out, int n)
     out[n - 1] = 0;
 }
 
-char *read_file_utf8(const wchar_t *path)
-{
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) return NULL;
-    LARGE_INTEGER size;
-    if (!GetFileSizeEx(f, &size) || size.QuadPart > (1 << 20)) { CloseHandle(f); return NULL; }
-    DWORD n = (DWORD)size.QuadPart, got = 0;
-    char *buf = HeapAlloc(GetProcessHeap(), 0, n + 1);
-    if (!buf) { CloseHandle(f); return NULL; }
-    if (!ReadFile(f, buf, n, &got, NULL)) got = 0;
-    buf[got] = 0;
-    CloseHandle(f);
-    return buf;
-}
-
 /* Creates every missing directory along `path`. */
 int ensure_dir(const wchar_t *path)
 {

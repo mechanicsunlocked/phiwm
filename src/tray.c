@@ -4,12 +4,9 @@
 #include <math.h>
 #include <stdio.h>
 
-#define ID_RELOAD   1
-#define ID_EDIT     2
-#define ID_FOLDER   3
-#define ID_LOG      4
-#define ID_AUTOSTART 5
-#define ID_QUIT     6
+#define ID_LOG       1
+#define ID_AUTOSTART 2
+#define ID_QUIT      3
 
 #define RUN_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 
@@ -28,7 +25,7 @@ UINT tray_taskbar_created_msg(void)
 
 static unsigned tray_color(void)
 {
-    return g.cfg && g.cfg->has_active ? g.cfg->active_border : 0x33ccff;
+    return PHI_ACTIVE_BORDER;
 }
 
 /* Draws the workspace number on a rounded square in the accent color. */
@@ -155,17 +152,6 @@ void tray_remove(void)
     icon = NULL;
 }
 
-void tray_balloon(const wchar_t *title, const wchar_t *text)
-{
-    if (!added) return;
-    NOTIFYICONDATAW n = nid;
-    n.uFlags = NIF_INFO;
-    n.dwInfoFlags = NIIF_WARNING;
-    lstrcpynW(n.szInfoTitle, title, ARRAYSIZE(n.szInfoTitle));
-    lstrcpynW(n.szInfo, text, ARRAYSIZE(n.szInfo));
-    Shell_NotifyIconW(NIM_MODIFY, &n);
-}
-
 int autostart_get(void)
 {
     HKEY k;
@@ -197,9 +183,6 @@ void tray_menu(void)
     if (!m) return;
     AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"phiwm " TEXT(PHI_VERSION_STR));
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(m, MF_STRING, ID_RELOAD, L"Reload config");
-    AppendMenuW(m, MF_STRING, ID_EDIT, L"Edit config");
-    AppendMenuW(m, MF_STRING, ID_FOLDER, L"Open config folder");
     AppendMenuW(m, MF_STRING, ID_LOG, L"Open log");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING | (autostart_get() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
@@ -214,10 +197,7 @@ void tray_menu(void)
     DestroyMenu(m);
 
     switch (cmd) {
-    case ID_RELOAD: wm_reload(1); break;
-    case ID_EDIT: wm_open_config(0); break;
-    case ID_FOLDER: wm_open_config(1); break;
-    case ID_LOG: wm_open_config(2); break;
+    case ID_LOG: wm_open_log(); break;
     case ID_AUTOSTART: autostart_set(!autostart_get()); break;
     case ID_QUIT: wm_quit(); break;
     }

@@ -1,12 +1,11 @@
 #include <winver.h>
 
 1 ICON "phiwm.ico"
-2 RCDATA "default.conf"
 1 24 "phiwm.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     0,1,0,0
-PRODUCTVERSION  0,1,0,0
+FILEVERSION     0,2,0,0
+PRODUCTVERSION  0,2,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -19,12 +18,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "phiwm"
             VALUE "FileDescription",  "phiwm - dwindle tiling window manager"
-            VALUE "FileVersion",      "0.1.0"
+            VALUE "FileVersion",      "0.2.0"
             VALUE "InternalName",     "phiwm"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "phiwm.exe"
             VALUE "ProductName",      "phiwm"
-            VALUE "ProductVersion",   "0.1.0"
+            VALUE "ProductVersion",   "0.2.0"
         END
     END
     BLOCK "VarFileInfo"

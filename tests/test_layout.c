@@ -35,7 +35,7 @@ int main(void)
 
     /* golden spiral: always split the newest window */
     for (long i = 2; i <= 5; i++) {
-        focus = phi_insert(&t, focus, (void *)i, area, &golden, -1, 0, 0);
+        focus = phi_insert(&t, focus, (void *)(size_t)i, area, &golden, -1, 0, 0);
         CHECK(focus != NULL);
     }
     phi_layout(&t, area, &golden);
@@ -128,6 +128,45 @@ int main(void)
     /* split ratio clamps */
     phi_split_ratio(b, 5.0, 1);
     CHECK(a->parent->ratio <= 0.95);
+    phi_free(&t);
+
+    /* minimum sizes */
+    PhiRect wide = { 0, 0, 1000, 800 };
+    a = phi_insert(&t, NULL, (void *)1, wide, &golden, -1, 0, 0);
+    b = phi_insert(&t, a, (void *)2, wide, &golden, -1, 0, 0);
+    phi_layout(&t, wide, &golden);
+    CHECK(a->parent->horiz == 1);
+    /* two windows too wide to sit side by side are stacked */
+    phi_set_min(a, 600, 100);
+    phi_set_min(b, 600, 100);
+    phi_layout(&t, wide, &golden);
+    CHECK(a->parent->horiz == 0 && a->box.w == 1000 && b->box.w == 1000 && b->box.y == a->box.h);
+    /* the split stays (locked) and the ratio gives a window its minimum when there is room */
+    phi_set_min(a, 0, 0);
+    phi_set_min(b, 0, 700);
+    phi_layout(&t, wide, &golden);
+    CHECK(a->parent->horiz == 0 && b->box.h == 700 && a->box.h == 100);
+    /* no direction fits: the ratio is left alone (the app overflows, phiwm does not jitter) */
+    phi_set_min(a, 600, 500);
+    phi_set_min(b, 600, 500);
+    phi_layout(&t, wide, &golden);
+    CHECK(a->parent->horiz == 0 && a->box.h == (int)(800 * 0.618 + 0.5));
+    /* stacked does not fit but side by side does: flips back */
+    phi_set_min(a, 0, 500);
+    phi_set_min(b, 0, 500);
+    phi_layout(&t, wide, &golden);
+    CHECK(a->parent->horiz == 1 && a->box.w == (int)(1000 * 0.618 + 0.5) && a->box.h == 800);
+    /* a column deeper in the spiral: its needs reach the root through measure() */
+    PhiNode *d = phi_insert(&t, b, (void *)3, wide, &golden, -1, 0, 0);
+    phi_set_min(a, 0, 0);
+    phi_set_min(b, 300, 0);
+    phi_set_min(d, 300, 0);
+    phi_layout(&t, wide, &golden);
+    CHECK(b->parent->horiz == 0);                 /* b over d in the 382 wide column */
+    CHECK(t.root->min_w == 300 && a->box.w + b->box.w == 1000 && b->box.w >= 300 && d->box.w >= 300);
+    phi_set_min(b, 500, 0);                       /* now the column must widen: the root ratio yields */
+    phi_layout(&t, wide, &golden);
+    CHECK(b->box.w == 500 && a->box.w == 500);
     phi_free(&t);
 
     if (fails) { printf("%d failure(s)\n", fails); return 1; }

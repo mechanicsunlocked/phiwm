@@ -24,28 +24,69 @@ static int want_horiz(PhiRect b, const PhiDwindle *cfg)
     return (double)b.w >= (double)b.h * m;
 }
 
+static int imax(int a, int b) { return a > b ? a : b; }
+
+/* Bottom-up: an inner node needs what its children need, side by side or stacked. */
+static void measure(PhiNode *n)
+{
+    if (is_leaf(n)) return;
+    PhiNode *a = n->child[0], *b = n->child[1];
+    measure(a);
+    measure(b);
+    if (n->horiz) { n->min_w = a->min_w + b->min_w;       n->min_h = imax(a->min_h, b->min_h); }
+    else          { n->min_w = imax(a->min_w, b->min_w);  n->min_h = a->min_h + b->min_h; }
+}
+
+static int fits(const PhiNode *n, int horiz, PhiRect box)
+{
+    const PhiNode *a = n->child[0], *b = n->child[1];
+    if (horiz) return a->min_w + b->min_w <= box.w && imax(a->min_h, b->min_h) <= box.h;
+    return imax(a->min_w, b->min_w) <= box.w && a->min_h + b->min_h <= box.h;
+}
+
+static int flipped;
+
 static void layout_node(PhiNode *n, PhiRect box, const PhiDwindle *cfg)
 {
     n->box = box;
     if (is_leaf(n)) return;
-    if (!n->locked) n->horiz = want_horiz(box, cfg);
-    PhiRect a = box, b = box;
-    if (n->horiz) {
-        a.w = (int)(box.w * n->ratio + 0.5);
-        b.x = box.x + a.w;
-        b.w = box.w - a.w;
-    } else {
-        a.h = (int)(box.h * n->ratio + 0.5);
-        b.y = box.y + a.h;
-        b.h = box.h - a.h;
+    int horiz = n->locked ? n->horiz : want_horiz(box, cfg);
+    /* A direction that cannot hold both children's minimums gives way to the other
+     * one when that fits: two wide windows end up stacked instead of overlapping. */
+    if (!fits(n, horiz, box) && fits(n, !horiz, box)) { horiz = !horiz; flipped++; }
+    n->horiz = horiz;
+    int len = horiz ? box.w : box.h;
+    int m0 = horiz ? n->child[0]->min_w : n->child[0]->min_h;
+    int m1 = horiz ? n->child[1]->min_w : n->child[1]->min_h;
+    int first = (int)(len * n->ratio + 0.5);
+    if (m0 + m1 <= len) {          /* room for both minimums: the ratio respects them */
+        if (first < m0) first = m0;
+        if (len - first < m1) first = len - m1;
     }
+    PhiRect a = box, b = box;
+    if (horiz) { a.w = first; b.x = box.x + first; b.w = box.w - first; }
+    else       { a.h = first; b.y = box.y + first; b.h = box.h - first; }
     layout_node(n->child[0], a, cfg);
     layout_node(n->child[1], b, cfg);
 }
 
 void phi_layout(PhiTree *t, PhiRect area, const PhiDwindle *cfg)
 {
-    if (t->root) layout_node(t->root, area, cfg);
+    if (!t->root) return;
+    /* a flip changes what the parents need; one more pass settles it */
+    for (int pass = 0; pass < 2; pass++) {
+        measure(t->root);
+        flipped = 0;
+        layout_node(t->root, area, cfg);
+        if (!flipped) break;
+    }
+}
+
+void phi_set_min(PhiNode *leaf, int w, int h)
+{
+    if (!leaf) return;
+    leaf->min_w = w;
+    leaf->min_h = h;
 }
 
 PhiNode *phi_first(const PhiTree *t)

@@ -1,21 +1,15 @@
 /* phiwm — global keybinds through a low-level keyboard hook.
  *
  * The hook lives on its own high-priority thread and does nothing but match
- * keys and post the bind index to the main thread, so a slow or hung window
- * can never make the keyboard lag. Matched keys are swallowed (key down and
- * the matching key up). When a bind uses Win or Alt, an unassigned key
- * (vk 0xE8) is injected so releasing Win does not open Start and releasing
- * Alt does not open an app's menu bar.
+ * keys against phi_binds and post the bind index to the main thread, so a
+ * slow or hung window can never make the keyboard lag. Matched keys are
+ * swallowed (key down and the matching key up). When a bind uses Win or Alt,
+ * an unassigned key (vk 0xE8) is injected so releasing Win does not open
+ * Start and releasing Alt does not open an app's menu bar.
  */
 #include "phiwm.h"
 
-typedef struct { unsigned mods, vk, scan; int repeat; } HookBind;
-
 static struct {
-    SRWLOCK  lock;
-    HookBind binds[PHI_MAX_BINDS];
-    int      n;
-    unsigned gen;
     HWND     target;
     HANDLE   thread;
     DWORD    tid;
@@ -83,16 +77,12 @@ static LRESULT CALLBACK ll_proc(int code, WPARAM wp, LPARAM lp)
 
     unsigned mods = current_mods();
     int idx = -1, repeat = 0;
-    unsigned gen;
-    AcquireSRWLockShared(&K.lock);
-    for (int i = 0; i < K.n; i++) {
-        const HookBind *b = &K.binds[i];
+    for (int i = 0; i < phi_nbinds; i++) {
+        const PhiBind *b = &phi_binds[i];
         if (b->mods != mods) continue;
         int hit = b->scan ? (k->scanCode == b->scan && !(k->flags & LLKHF_EXTENDED)) : (b->vk == vk);
         if (hit) { idx = i; repeat = b->repeat; break; }
     }
-    gen = K.gen;
-    ReleaseSRWLockShared(&K.lock);
 
     if (idx < 0) {
         K.down[vk] = 0;   /* a fresh press means any earlier key up was missed */
@@ -102,7 +92,7 @@ static LRESULT CALLBACK ll_proc(int code, WPARAM wp, LPARAM lp)
     int was_down = K.down[vk];
     K.down[vk] = 1;
     if (mods & (PHI_MOD_SUPER | PHI_MOD_ALT)) send_mask_key();
-    if (!was_down || repeat) PostMessageW(K.target, WM_PHI_BIND, (WPARAM)idx, (LPARAM)gen);
+    if (!was_down || repeat) PostMessageW(K.target, WM_PHI_BIND, (WPARAM)idx, 0);
     return 1;
 }
 
@@ -132,7 +122,6 @@ static DWORD WINAPI hook_thread(LPVOID ready)
 
 int keys_start(HWND target)
 {
-    InitializeSRWLock(&K.lock);
     K.target = target;
     HANDLE ready = CreateEventW(NULL, TRUE, FALSE, NULL);
     K.thread = CreateThread(NULL, 0, hook_thread, ready, 0, &K.tid);
@@ -156,19 +145,4 @@ void keys_stop(void)
     CloseHandle(K.thread);
     K.thread = NULL;
     K.tid = 0;
-}
-
-void keys_set_binds(const PhiConfig *c, unsigned gen)
-{
-    AcquireSRWLockExclusive(&K.lock);
-    K.n = 0;
-    for (int i = 0; i < c->nbinds && i < PHI_MAX_BINDS; i++) {
-        K.binds[i].mods = c->binds[i].mods;
-        K.binds[i].vk = c->binds[i].vk;
-        K.binds[i].scan = c->binds[i].scan;
-        K.binds[i].repeat = c->binds[i].repeat;
-        K.n++;
-    }
-    K.gen = gen;
-    ReleaseSRWLockExclusive(&K.lock);
 }

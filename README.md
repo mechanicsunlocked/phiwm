@@ -1,15 +1,13 @@
 # phiwm
 
-Dwindle tiling for Windows 11, configured like `hyprland.conf`. Every new window splits the
-focused one — by default at the golden ratio, so the existing window keeps 61.8% and windows
-spiral in toward the bottom-right. One mode, no layout zoo.
+Dwindle tiling for Windows 11. Every new window splits the focused one at the golden ratio,
+so the existing window keeps 61.8% and windows spiral in toward the bottom-right. One layout,
+one set of keys, nothing to configure: install it and it works.
 
-- Plain C, one ~160 KB exe, no services, no helper daemons, no runtime.
-- Hyprland config syntax: `$vars`, `section { }`, `bind`/`binde`/`bindd`, `windowrule`,
-  `exec-once`. Most Omarchy/Hyprland lines can be pasted in; unknown options are ignored.
-- Saves reload instantly (the file is watched).
+- Plain C, one ~100 KB exe, no services, no helper daemons, no runtime, no config file,
+  no system setting touched.
 - Workspaces 1–10, bound to monitors the way Hyprland does it.
-- Native Windows 11 border colors and square/rounded corners — no overlay windows.
+- Native Windows 11 border colors and rounded corners — no overlay windows.
 - Tray icon shows the focused workspace number.
 
 ## Install
@@ -19,10 +17,9 @@ winget install phiwm
 phiwm
 ```
 
-Tray menu → **Start with Windows** to autostart. The config is created on first run at
-`%USERPROFILE%\.config\phiwm\phiwm.conf` (override with `PHIWM_CONFIG`).
+Tray menu → **Start with Windows** to autostart.
 
-## Default keys
+## Keys
 
 | Keys | Action |
 |---|---|
@@ -39,67 +36,61 @@ Tray menu → **Start with Windows** to autostart. The config is created on firs
 | Win + F / Shift+F | Fullscreen / maximize |
 | Win + − / = (+Shift) | Shrink / grow width (height) |
 | Win + Alt + Tab | Cycle windows on the workspace |
-| Win + Ctrl + R | Reload config |
+| Win + Ctrl + R | Refresh: rescan monitors, retile, reinstall the keyboard hook |
 | Win + Ctrl + Shift + Q | Quit (shows every hidden window) |
+
+The digit keys are bound by position, so Win+1…0 is the top row on any keyboard layout.
 
 Mouse: drag a tile's border to resize the split, drag its title bar onto another tile to swap,
 or onto another monitor to move it there.
 
-## Config
+## Built in, not configured
 
-```ini
-$mainMod = SUPER
+Everything that used to be a config file is one table in `src/defaults.c`: the keys above,
+the layout constants (gaps 5/10 px, golden ratio, new windows go right/bottom, splits keep
+their direction) and the window rules. Change it there and rebuild.
 
-general {
-    gaps_in  = 5
-    gaps_out = 10
-    col.active_border   = rgba(33ccffee)
-    col.inactive_border = rgba(595959aa)
-}
-decoration { rounding = 10 }        # 0 = square corners
-dwindle {
-    default_split_ratio = 1.236     # Hyprland scale: 1.0 = 50/50, 1.236 = golden
-    force_split = 2                 # 0 = side of the mouse, 1 = left/top, 2 = right/bottom
-    preserve_split = true
-}
-input { follow_mouse = 0 }          # 1 = focus follows mouse (this session only)
+Window rules: Picture-in-Picture windows, Calculator, Explorer's copy dialog and PowerToys
+windows float. Dialogs, tool windows and fixed-size windows float on their own.
 
-bind  = $mainMod, RETURN, exec, wt.exe
-binde = $mainMod, minus, resizeactive, -100 0
-bind  = $mainMod, code:10, workspace, 1       # code:N = key position, any layout
-
-windowrule = float, title:^(Picture-in-Picture)$
-windowrule = workspace 3 silent, exe:^(Spotify\.exe)$
-exec-once  = C:\Tools\something.exe
-```
-
-**Dispatchers:** `exec`, `killactive`, `movefocus`, `movewindow`, `swapwindow`,
-`togglesplit`, `togglefloating`, `pseudo`, `fullscreen 0|1`, `workspace`, `movetoworkspace`,
-`movetoworkspacesilent`, `focusmonitor`, `splitratio`, `resizeactive`, `cyclenext`,
-`layoutmsg togglesplit`, `reload`, `exit`.
+From scripts: `phiwm dispatch workspace 3`, `phiwm quit`. Dispatchers: `exec`, `killactive`,
+`movefocus`, `movewindow`, `swapwindow`, `togglesplit`, `togglefloating`, `pseudo`,
+`fullscreen 0|1`, `workspace`, `movetoworkspace`, `movetoworkspacesilent`, `focusmonitor`,
+`splitratio`, `resizeactive`, `cyclenext`, `layoutmsg togglesplit`, `refresh`, `exit`.
 Workspace arguments: `3`, `+1`, `-1`, `e+1`, `e-1`, `previous`, `empty`.
-
-**Window rules:** `float`, `tile`, `pseudo`, `workspace N [silent]`. Match on `class:`,
-`title:` or `exe:`. `class:` also matches the exe name without `.exe`, so `class:^(firefox)$`
-works. Patterns accept the usual Hyprland regex shapes (`^(a|b)$`, `.*`, `\.`), matched
-case-insensitively against the whole string.
-
-**Modifiers:** `SUPER`, `SHIFT`, `CTRL`, `ALT`. **Keys:** letters, digits, `F1`–`F24`,
-`RETURN`, `SPACE`, `TAB`, `ESCAPE`, arrows, `minus`, `equal`, `comma`, `period`, `slash`,
-`semicolon`, `apostrophe`, `grave`, `bracketleft/right`, `backslash`, `Home`, `End`,
-`Prior`, `Next`, `Delete`, `Print`, `XF86Audio*`, `code:N`.
-
-From scripts: `phiwm dispatch workspace 3`, `phiwm reload`, `phiwm quit`.
 
 ## How it behaves
 
 - Windows on hidden workspaces are hidden, so they leave the taskbar — like Hyprland.
   If phiwm is killed, the next start brings them back; a normal quit does it right away.
-- Dialogs, tool windows and fixed-size windows float on their own.
+- Workspace switches are instant: DWM's fade-in/fade-out is switched off per managed window
+  (nothing system-wide) and a revealed window is moved and shown in one step.
+- Switching to an empty workspace shows the bare desktop. The tray number says where you are.
+- A new window gets the focus, like in Hyprland, so the next one splits it: the spiral.
+- Focus follows the mouse, like in Hyprland: hovering a window focuses it. Menus, popups,
+  dialogs and Start keep the focus, nothing happens while a button is held or a window is
+  being dragged, and the desktop between the gaps is ignored. When phiwm moves the focus
+  by keyboard, the cursor goes along, so the focus does not jump straight back.
+- Win+F covers the whole monitor, taskbar included, with the title bar gone. Leaving
+  fullscreen, switching workspace, or quitting phiwm puts the frame back.
 - An app that maximizes itself is left maximized until it restores.
-- Apps that insist on a minimum size win after a few corrections instead of jittering.
-- Logs: `%LOCALAPPDATA%\phiwm\phiwm.log` (every managed window is logged with class and exe,
-  which is what you match in rules).
+- The layout knows each app's minimum size (Windows Terminal wants about 100 columns): a
+  split that cannot hold two such windows side by side stacks them, and the ratio gives a
+  window its minimum when there is room. A window that still cannot fit keeps its size, and
+  the log says so, instead of jittering.
+- Log: `%LOCALAPPDATA%\phiwm\phiwm.log` (previous run: `phiwm.old.log`). Every managed window
+  is logged with its class and exe, and so is every keybind and workspace switch.
+
+## Source
+
+- `src/layout.c` — the dwindle tree, minimum-size aware. Platform independent, unit tested.
+- `src/defaults.c` — keys, window rules, constants. Platform independent, unit tested.
+- `src/wm.c` — the window manager: WinEvent hooks, workspaces, monitors, dispatchers, IPC.
+  Everything runs on the main thread; calls into other processes' windows are asynchronous,
+  so a hung app can never freeze the tiler.
+- `src/keys.c` — low-level keyboard hook on its own thread; it only matches keys and posts
+  the bind index to the main thread.
+- `src/tray.c`, `src/util.c` — tray icon and menu, logging, paths, string helpers.
 
 ## Limits (Windows, not phiwm)
 
@@ -109,13 +100,13 @@ From scripts: `phiwm dispatch workspace 3`, `phiwm reload`, `phiwm quit`.
   to tile them too. `phiwm dispatch …` then has to run elevated as well — on purpose, so
   normal programs can't make an elevated phiwm `exec` things.
 - Don't mix with **Windows virtual desktops**; phiwm's workspaces replace them.
-- No animations: Windows does not let a tiler draw transitions.
+- No animations of its own: Windows does not let a tiler draw transitions.
 
 ## Build
 
 ```
 make            # cross-compile on Linux (mingw-w64)
-make test       # layout + config tests, native
+make test       # layout + defaults tests, native
 make dist       # build/phiwm-<version>-x64.zip
 ```
 

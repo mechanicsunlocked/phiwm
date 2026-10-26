@@ -15,17 +15,17 @@
 #include <string.h>
 
 Globals g;
-static PhiConfig cfg_a, cfg_b;
 
 /* DWM attributes by value, so older headers are fine */
 #define A_EXTENDED_FRAME_BOUNDS 9
 #define A_CLOAKED               14
 #define A_CORNER                33
 #define A_BORDER_COLOR          34
+#define A_TRANSITIONS_OFF       3    /* DWMWA_TRANSITIONS_FORCEDISABLED */
 #define COLOR_DEFAULT           0xFFFFFFFFu
 
 enum {
-    T_RETILE = 1, T_SETTLE1, T_SETTLE2, T_FOCUS, T_CFGWATCH, T_REHOOK, T_MONITORS
+    T_RETILE = 1, T_SETTLE1, T_SETTLE2, T_FOCUS, T_REHOOK, T_MONITORS, T_MOUSE
 };
 
 #define COPYDATA_MAGIC 0x50484957u   /* 'PHIW' */
@@ -80,8 +80,8 @@ static PhiRect ws_area(int i, int *gap_in)
     int m = g.ws[i].mon;
     if (m < 0 || m >= g.nmon) m = 0;
     Monitor *mo = &g.mon[m];
-    int go = scale(g.cfg->gaps_out, mo->dpi);
-    if (gap_in) *gap_in = scale(g.cfg->gaps_in, mo->dpi);
+    int go = scale(PHI_GAPS_OUT, mo->dpi);
+    if (gap_in) *gap_in = scale(PHI_GAPS_IN, mo->dpi);
     PhiRect r = { mo->work.left + go, mo->work.top + go,
                   (mo->work.right - mo->work.left) - 2 * go,
                   (mo->work.bottom - mo->work.top) - 2 * go };
@@ -230,17 +230,12 @@ static int rule_matches(const PhiRule *r, const char *cls8, const char *exe, con
 {
     char base[MAX_PATH];
     strip_exe(exe, base, sizeof base);
-    for (int i = 0; i < r->nmatch; i++) {
-        const char *p = r->m[i].pat;
-        int ok = 0;
-        switch (r->m[i].field) {
-        case PHI_FIELD_CLASS: ok = phi_pattern_match(p, cls8) || phi_pattern_match(p, base); break;
-        case PHI_FIELD_TITLE: ok = phi_pattern_match(p, title8); break;
-        case PHI_FIELD_EXE:   ok = phi_pattern_match(p, exe) || phi_pattern_match(p, base); break;
-        }
-        if (!ok) return 0;
+    switch (r->field) {
+    case PHI_FIELD_CLASS: return phi_pattern_match(r->pat, cls8) || phi_pattern_match(r->pat, base);
+    case PHI_FIELD_TITLE: return phi_pattern_match(r->pat, title8);
+    case PHI_FIELD_EXE:   return phi_pattern_match(r->pat, exe) || phi_pattern_match(r->pat, base);
     }
-    return 1;
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,16 +246,60 @@ static void set_border(Win *w, int state)
 {
     if (!w || w->border_state == state) return;
     COLORREF c = COLOR_DEFAULT;
-    if (state == 2 && g.cfg->has_active) c = colorref(g.cfg->active_border);
-    if (state == 1 && g.cfg->has_inactive) c = colorref(g.cfg->inactive_border);
+    if (state == 2) c = colorref(PHI_ACTIVE_BORDER);
+    if (state == 1) c = colorref(PHI_INACTIVE_BORDER);
     DwmSetWindowAttribute(w->hwnd, A_BORDER_COLOR, &c, sizeof c);
     w->border_state = state;
 }
 
 static void set_corners(Win *w, int reset)
 {
-    DWORD pref = (reset || g.cfg->rounding > 0) ? 0 /* default */ : 1 /* do not round */;
+    DWORD pref = (reset || PHI_ROUNDING) ? 0 /* default */ : 1 /* do not round */;
     DwmSetWindowAttribute(w->hwnd, A_CORNER, &pref, sizeof pref);
+}
+
+/* DWM fades a window in and out when it is shown or hidden. Off for managed windows,
+ * so a workspace switch is instant. Per window, nothing system-wide. */
+static void set_transitions(HWND h, int off)
+{
+    BOOL v = off ? TRUE : FALSE;
+    DwmSetWindowAttribute(h, A_TRANSITIONS_OFF, &v, sizeof v);
+}
+
+/* Fullscreen 0: no caption, no frame, square corners, and the window rect is the
+ * monitor, so the shell treats it as a fullscreen app and keeps the taskbar under
+ * it. The style change is the one synchronous call phiwm makes into another
+ * process; the user just asked for it on the active window, so it is awake. */
+static void fs_style(Win *w, int on)
+{
+    HWND h = w->hwnd;
+    if (!IsWindow(h)) { w->fs_styled = 0; return; }
+    if (on && !w->fs_styled) {
+        w->fs_style = GetWindowLongW(h, GWL_STYLE);
+        w->fs_exstyle = GetWindowLongW(h, GWL_EXSTYLE);
+        w->fs_styled = 1;
+        SetWindowLongW(h, GWL_STYLE, w->fs_style & ~(LONG)WS_OVERLAPPEDWINDOW);
+        SetWindowLongW(h, GWL_EXSTYLE, w->fs_exstyle &
+                       ~(LONG)(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE));
+        DWORD square = 1;   /* DWMWCP_DONOTROUND */
+        DwmSetWindowAttribute(h, A_CORNER, &square, sizeof square);
+    } else if (!on && w->fs_styled) {
+        w->fs_styled = 0;
+        SetWindowLongW(h, GWL_STYLE, w->fs_style);
+        SetWindowLongW(h, GWL_EXSTYLE, w->fs_exstyle);
+        set_corners(w, 0);
+        SetWindowPos(h, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS);
+    }
+}
+
+/* Leaves fullscreen: the window gets its frame back. The caller retiles. */
+static void fs_clear(Workspace *ws)
+{
+    Win *f = ws->fs;
+    if (!f) return;
+    ws->fs = NULL;
+    if (f->fs_styled) fs_style(f, 0);
 }
 
 static void mark_active(Win *w)
@@ -339,7 +378,14 @@ static void restore_hidden_from_file(void)
 static BOOL CALLBACK collect_owned(HWND h, LPARAM lp)
 {
     Win *w = (Win *)lp;
-    if (w->nowned < 16 && IsWindowVisible(h) && GetWindow(h, GW_OWNER) == w->hwnd) w->owned[w->nowned++] = h;
+    if (w->nowned >= 16 || !IsWindowVisible(h) || GetWindow(h, GW_OWNER) != w->hwnd) return TRUE;
+    wchar_t cls[128];
+    GetClassNameW(h, cls, 128);
+    /* ConPTY's pseudo console window is owned by the terminal window. Hiding it tells
+     * the terminal its console app wants to hide, and Windows Terminal then minimizes
+     * itself. Nothing in the ignore list needs hiding anyway. */
+    if (class_ignored(cls)) return TRUE;
+    w->owned[w->nowned++] = h;
     return TRUE;
 }
 
@@ -387,12 +433,38 @@ static void read_margins(Win *w)
     RECT m = { fr.left - wr.left, fr.top - wr.top, wr.right - fr.right, wr.bottom - fr.bottom };
     if (m.left < 0 || m.left > 40 || m.top < 0 || m.top > 40 || m.right < 0 || m.right > 40 ||
         m.bottom < 0 || m.bottom > 40) return;
+    /* a resizable frame always has invisible borders; all zero means DWM has not
+     * caught up with a frame change yet (leaving fullscreen): keep the known values */
+    if (!m.left && !m.top && !m.right && !m.bottom && (GetWindowLongW(h, GWL_STYLE) & WS_THICKFRAME)) return;
     w->margin = m;
     w->has_margin = 1;
 }
 
-/* Puts the visible part of the window exactly on `v`. Returns 1 if it moved it. */
-static int place(Win *w, PhiRect v)
+/* The smallest outer size the app accepts (WM_GETMINMAXINFO), as the visible rect in
+ * physical pixels of its monitor. The wait is bounded; a hung app gets no minimum. */
+static void read_min_size(Win *w)
+{
+    w->min_w = w->min_h = 0;
+    MINMAXINFO mmi;
+    ZeroMemory(&mmi, sizeof mmi);
+    DWORD_PTR res = 0;
+    if (!SendMessageTimeoutW(w->hwnd, WM_GETMINMAXINFO, 0, (LPARAM)&mmi, SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, &res))
+        return;
+    UINT mdpi = g.mon[mon_from_hwnd(w->hwnd)].dpi;
+    UINT wdpi = GetDpiForWindow(w->hwnd);   /* 96 for DPI-unaware apps: Windows scales them up */
+    if (!wdpi) wdpi = mdpi;
+    int mw = MulDiv(mmi.ptMinTrackSize.x, (int)mdpi, (int)wdpi);
+    int mh = MulDiv(mmi.ptMinTrackSize.y, (int)mdpi, (int)wdpi);
+    if (w->has_margin) { mw -= w->margin.left + w->margin.right; mh -= w->margin.top + w->margin.bottom; }
+    /* Windows' own default (a title bar's worth) is not a constraint worth tracking */
+    if (mw > GetSystemMetricsForDpi(SM_CXMINTRACK, mdpi)) w->min_w = mw;
+    if (mh > GetSystemMetricsForDpi(SM_CYMINTRACK, mdpi)) w->min_h = mh;
+}
+
+/* Puts the visible part of the window exactly on `v`. With `reveal` the window is
+ * also shown in the same call, so it can never be seen at a stale spot first.
+ * Returns 1 if it moved it. */
+static int place(Win *w, PhiRect v, int reveal)
 {
     HWND h = w->hwnd;
     w->tile = v;
@@ -405,10 +477,22 @@ static int place(Win *w, PhiRect v)
     RECT cur;
     w->placed = want;
     w->has_placed = 1;
-    if (!zoomed && GetWindowRect(h, &cur) && EqualRect(&cur, &want)) return 0;
-    SetWindowPos(h, NULL, want.left, want.top, want.right - want.left, want.bottom - want.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+    if (!reveal && !zoomed && GetWindowRect(h, &cur) && EqualRect(&cur, &want)) return 0;
+    UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS;
+    if (reveal) flags |= SWP_SHOWWINDOW;
+    SetWindowPos(h, NULL, want.left, want.top, want.right - want.left, want.bottom - want.top, flags);
     return 1;
+}
+
+/* Bookkeeping after place(w, r, 1). Minimized windows are not placed, so they are
+ * shown the plain way (they stay minimized, back in the taskbar). */
+static void revealed(Win *w)
+{
+    if (!w->hidden) return;
+    w->hidden = 0;
+    w->vis_tick = now();
+    if (IsIconic(w->hwnd)) ShowWindowAsync(w->hwnd, SW_SHOWNA);
+    show_owned(w);
 }
 
 static void place_floating_on_monitor(Win *w, int m)
@@ -425,14 +509,19 @@ static void place_floating_on_monitor(Win *w, int m)
     SetWindowPos(w->hwnd, NULL, x, y, ww, hh, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 }
 
-static void apply_ws(int i)
+/* Lays out workspace i. With `reveal`, hidden tiled windows are shown as they are placed. */
+static void apply_ws_ex(int i, int reveal)
 {
     if (!ws_visible(i)) return;
     Workspace *ws = &g.ws[i];
     Monitor *mo = &g.mon[ws->mon];
     int gin;
     PhiRect area = ws_area(i, &gin);
-    phi_layout(&ws->tree, area, &g.cfg->dw);
+    for (PhiNode *n = phi_first(&ws->tree); n; n = phi_next(n)) {
+        Win *w = n->win;   /* its minimum plus the gap it may lose on either side */
+        phi_set_min(n, w->min_w ? w->min_w + 2 * gin : 0, w->min_h ? w->min_h + 2 * gin : 0);
+    }
+    phi_layout(&ws->tree, area, &phi_dwindle);
     for (PhiNode *n = phi_first(&ws->tree); n; n = phi_next(n)) {
         Win *w = n->win;
         if (w == ws->fs) continue;
@@ -445,18 +534,31 @@ static void apply_ws(int i)
             if (fw > 0 && fw < r.w) { r.x += (r.w - fw) / 2; r.w = fw; }
             if (fh > 0 && fh < r.h) { r.y += (r.h - fh) / 2; r.h = fh; }
         }
-        place(w, r);
+        place(w, r, reveal && w->hidden);
+        if (reveal) revealed(w);
     }
     if (ws->fs && ws->fs_mode != 2) {
-        PhiRect r = area;
+        Win *f = ws->fs;
         if (ws->fs_mode == 0) {
-            r.x = mo->rc.left; r.y = mo->rc.top;
-            r.w = mo->rc.right - mo->rc.left; r.h = mo->rc.bottom - mo->rc.top;
+            /* the exact monitor rect, no margins: the frame is gone */
+            RECT rc = mo->rc;
+            if (!f->fs_styled) fs_style(f, 1);
+            if (IsZoomed(f->hwnd)) ShowWindowAsync(f->hwnd, SW_SHOWNOACTIVATE);
+            f->tile = (PhiRect){ rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top };
+            f->placed = rc;
+            f->has_placed = 1;
+            UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS;
+            if (reveal && f->hidden) flags |= SWP_SHOWWINDOW;
+            SetWindowPos(f->hwnd, HWND_TOP, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, flags);
+        } else {
+            place(f, area, reveal && f->hidden);
+            SetWindowPos(f->hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         }
-        place(ws->fs, r);
-        SetWindowPos(ws->fs->hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        if (reveal) revealed(f);
     }
 }
+
+static void apply_ws(int i) { apply_ws_ex(i, 0); }
 
 static void apply_all(void)
 {
@@ -493,7 +595,25 @@ static void force_foreground(HWND h)
     SendInput(1, &in, sizeof in);
 }
 
-static void focus_win(Win *w)
+static POINT mouse_last;   /* where the cursor was at the last focus-follows-mouse check */
+
+/* Like hyprland: when phiwm moves the focus by itself, the cursor goes along, so
+ * focus-follows-mouse cannot take the focus straight back on the next nudge. */
+static void warp_cursor(Win *w)
+{
+    RECT r;
+    if (w->node) r = (RECT){ w->tile.x, w->tile.y, w->tile.x + w->tile.w, w->tile.y + w->tile.h };
+    else if (!IsIconic(w->hwnd)) { if (!GetWindowRect(w->hwnd, &r)) return; }
+    else if (w->has_float_rect) r = w->float_rect;
+    else return;
+    POINT p;
+    if (!GetCursorPos(&p) || PtInRect(&r, p)) return;
+    mouse_last = (POINT){ (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+    SetCursorPos(mouse_last.x, mouse_last.y);
+}
+
+/* warp = 0 when the mouse brought the focus here itself */
+static void focus_win_ex(Win *w, int warp)
 {
     if (!w) return;
     if (w->minimized || IsIconic(w->hwnd)) ShowWindowAsync(w->hwnd, SW_RESTORE);
@@ -502,6 +622,7 @@ static void focus_win(Win *w)
     w->focus_stamp = ++g.stamp;
     if (ws->mon >= 0) g.cur_mon = ws->mon;
     mark_active(w);
+    if (warp) warp_cursor(w);
     force_foreground(w->hwnd);
     if (GetForegroundWindow() != w->hwnd) {
         /* the window may still be processing its async show; try again shortly */
@@ -511,6 +632,8 @@ static void focus_win(Win *w)
     }
     tray_update();
 }
+
+static void focus_win(Win *w) { focus_win_ex(w, 1); }
 
 static ULONGLONG desktop_focus_tick;
 
@@ -542,7 +665,7 @@ static void tile_insert(Win *w, Win *target_win, int force, const POINT *pt)
     POINT p;
     if (pt) p = *pt; else GetCursorPos(&p);
     PhiRect area = ws_area(w->ws, NULL);
-    w->node = phi_insert(&ws->tree, target, w, area, &g.cfg->dw, force, p.x, p.y);
+    w->node = phi_insert(&ws->tree, target, w, area, &phi_dwindle, force, p.x, p.y);
 }
 
 static void tile_remove(Win *w)
@@ -567,7 +690,7 @@ static void swap_wins(Win *a, Win *b)
         if (g.ws[a->ws].focus == b) g.ws[a->ws].focus = a;
         if (g.ws[b->ws].focus == a) g.ws[b->ws].focus = b;
         for (int i = 0; i < PHI_MAX_WS; i++)
-            if (g.ws[i].fs == a || g.ws[i].fs == b) g.ws[i].fs = NULL;
+            if (g.ws[i].fs == a || g.ws[i].fs == b) fs_clear(&g.ws[i]);
     }
     structural_change();
 }
@@ -598,8 +721,8 @@ static Win *manage(HWND h, int startup)
     utf8_from_wide(title, title8, sizeof title8);
 
     int target = -1, silent = 0;
-    for (int i = 0; i < g.cfg->nrules; i++) {
-        const PhiRule *r = &g.cfg->rules[i];
+    for (int i = 0; i < phi_nrules; i++) {
+        const PhiRule *r = &phi_rules[i];
         if (!rule_matches(r, cls8, w->exe, title8)) continue;
         switch (r->action) {
         case PHI_RULE_FLOAT: float_hint = 1; break;
@@ -619,14 +742,16 @@ static Win *manage(HWND h, int startup)
     g.wins[g.nwins++] = w;
 
     read_margins(w);
+    read_min_size(w);
     if (!w->floating && !w->minimized) tile_insert(w, NULL, -1, NULL);
     w->border_state = -1;
     set_border(w, 1);
     set_corners(w, 0);
+    set_transitions(h, 1);
     structural_change();
 
-    phi_log("manage %p ws=%d float=%d cls=%s exe=%s title=%s", (void *)h, target + 1, w->floating,
-            cls8, w->exe, title8);
+    phi_log("manage %p ws=%d float=%d min=%dx%d cls=%s exe=%s title=%s", (void *)h, target + 1,
+            w->floating, w->min_w, w->min_h, cls8, w->exe, title8);
 
     if (!ws_visible(target)) {
         if (!silent && !startup) { switch_ws(target, w); return w; }
@@ -639,6 +764,7 @@ static Win *manage(HWND h, int startup)
         apply_ws(target);
         SetTimer(g.msgwnd, T_SETTLE1, 150, NULL);
         SetTimer(g.msgwnd, T_SETTLE2, 600, NULL);
+        if (!w->minimized) focus_win(w);   /* like hyprland: a new window gets the focus */
     }
     return w;
 }
@@ -651,7 +777,7 @@ static void unmanage(Win *w, int alive)
     int was_fg_ws = ws_visible(i) && ws->mon == g.cur_mon;
     tile_remove(w);
     for (int k = 0; k < PHI_MAX_WS; k++) {
-        if (g.ws[k].fs == w) g.ws[k].fs = NULL;
+        if (g.ws[k].fs == w) fs_clear(&g.ws[k]);
         if (g.ws[k].focus == w) g.ws[k].focus = NULL;
     }
     if (g.dragging == w) g.dragging = NULL;
@@ -661,6 +787,7 @@ static void unmanage(Win *w, int alive)
         COLORREF c = COLOR_DEFAULT;
         DwmSetWindowAttribute(w->hwnd, A_BORDER_COLOR, &c, sizeof c);
         set_corners(w, 1);
+        set_transitions(w->hwnd, 0);
         if (w->hidden) ShowWindowAsync(w->hwnd, SW_SHOWNA);
     }
     for (int k = 0; k < g.nwins; k++) {
@@ -675,6 +802,7 @@ static void unmanage(Win *w, int alive)
     apply_ws(i);
     /* like hyprland: closing a window focuses the next one on the same workspace */
     if (was_focus && was_fg_ws && ws->focus) {
+        warp_cursor(ws->focus);
         g.pending_focus = ws->focus->hwnd;
         g.focus_tries = 0;
         SetTimer(g.msgwnd, T_FOCUS, 30, NULL);
@@ -703,12 +831,14 @@ static void switch_ws(int n, Win *focus)
     t->mon = m;
     g.mon[m].ws = n;
     g.cur_mon = m;
+    phi_log("workspace %d -> %d", old + 1, n + 1);
+    if (old != n && g.ws[old].fs_mode != 2) fs_clear(&g.ws[old]);   /* leaving puts the frame back */
 
-    apply_ws(n);   /* position first (hidden windows can be moved), then reveal */
+    apply_ws_ex(n, 1);   /* tiled windows: moved and shown in one step */
     for (int k = 0; k < g.nwins; k++)
         if (g.wins[k]->ws == n && g.wins[k]->floating && !g.wins[k]->minimized)
             place_floating_on_monitor(g.wins[k], m);
-    for (int k = 0; k < g.nwins; k++) if (g.wins[k]->ws == n) win_show(g.wins[k]);
+    for (int k = 0; k < g.nwins; k++) if (g.wins[k]->ws == n) win_show(g.wins[k]);   /* floating, minimized */
     for (int k = 0; k < g.nwins; k++) if (g.wins[k]->ws == old) win_hide(g.wins[k]);
     if (old != n && ws_is_empty(old)) g.ws[old].mon = -1;
 
@@ -762,7 +892,7 @@ static void move_to_ws(Win *w, int n, int mode, Win *target, const POINT *pt)
     int src = w->ws;
     Workspace *s = &g.ws[src], *d = &g.ws[n];
     tile_remove(w);
-    if (s->fs == w) s->fs = NULL;
+    if (s->fs == w) fs_clear(s);
     if (s->focus == w) s->focus = NULL;
     w->ws = n;
     if (d->mon < 0) d->mon = (s->mon >= 0) ? s->mon : g.cur_mon;
@@ -778,7 +908,7 @@ static void move_to_ws(Win *w, int n, int mode, Win *target, const POINT *pt)
         switch_ws(n, w);
         apply_all();
     } else {
-        if (ws_visible(n)) { win_show(w); apply_ws(n); }
+        if (ws_visible(n)) { apply_ws_ex(n, 1); win_show(w); }
         else win_hide(w);
         apply_ws(src);
         if (mode == MOVE_KEEP_FOCUS) focus_win(w);
@@ -1118,7 +1248,7 @@ static void cmd_togglefloating(void)
     } else {
         tile_remove(a);
         a->floating = 1;
-        if (ws->fs == a) ws->fs = NULL;
+        if (ws->fs == a) fs_clear(ws);
         RECT wa = g.mon[ws->mon >= 0 ? ws->mon : 0].work;
         int W = wa.right - wa.left, H = wa.bottom - wa.top;
         RECT r = a->float_rect;
@@ -1139,7 +1269,7 @@ static void cmd_fullscreen(int mode)
     if (!a) return;
     Workspace *ws = &g.ws[a->ws];
     if (ws->fs == a) {
-        ws->fs = NULL;
+        fs_clear(ws);
         if (IsZoomed(a->hwnd)) ShowWindowAsync(a->hwnd, SW_SHOWNOACTIVATE);
         if (a->floating && a->has_float_rect) {
             RECT r = a->float_rect;
@@ -1222,7 +1352,7 @@ static void dispatch(const char *disp, const char *arg)
     if (!arg) arg = "";
     if (!strcmp(disp, "exec")) { run_command(arg); return; }
     if (!strcmp(disp, "exit")) { wm_quit(); return; }
-    if (!strcmp(disp, "reload")) { wm_reload(1); return; }
+    if (!strcmp(disp, "refresh")) { wm_refresh(); return; }
     if (!strcmp(disp, "killactive")) {
         HWND fg = GetForegroundWindow();
         if (closable(fg)) PostMessageW(fg, WM_CLOSE, 0, 0);
@@ -1284,6 +1414,7 @@ static void on_foreground(HWND h)
 {
     if (g.pending_focus && h == g.pending_focus) { KillTimer(g.msgwnd, T_FOCUS); g.pending_focus = NULL; }
     Win *w = win_find(h);
+    if (!w) w = manage(h, 0);   /* the foreground event can beat the show event: take it over now */
     if (!w) {
         mark_active(NULL);
         if (is_desktop(h)) {
@@ -1305,7 +1436,7 @@ static void on_foreground(HWND h)
     }
     Workspace *ws = &g.ws[w->ws];
     if (ws->fs && ws->fs != w && w->node && ws->fs_mode != 2) {
-        ws->fs = NULL;
+        fs_clear(ws);
         structural_change();
         apply_ws(w->ws);
     }
@@ -1314,6 +1445,35 @@ static void on_foreground(HWND h)
     g.cur_mon = ws->mon;
     mark_active(w);
     tray_update();
+}
+
+/* Focus follows the mouse, polled every 40 ms (a second low-level hook would only
+ * add input latency). The focus moves to the managed window under the cursor when
+ * the cursor really moved, no button is held, nothing is being dragged, no menu is
+ * open, and the current focus is a managed window or the desktop. So menus, popups,
+ * dialogs and Start keep theirs, and the desktop between the gaps changes nothing. */
+static void mouse_tick(void)
+{
+    POINT p;
+    if (!GetCursorPos(&p) || (p.x == mouse_last.x && p.y == mouse_last.y)) return;
+    mouse_last = p;
+    if (g.dragging || g.pending_focus) return;
+    if ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON) |
+         GetAsyncKeyState(VK_XBUTTON1) | GetAsyncKeyState(VK_XBUTTON2)) & 0x8000) return;
+    GUITHREADINFO gti;
+    gti.cbSize = sizeof gti;
+    if (GetGUIThreadInfo(0, &gti) &&
+        (gti.hwndCapture || (gti.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE | GUI_SYSTEMMENUMODE | GUI_INMOVESIZE))))
+        return;
+    HWND h = WindowFromPoint(p);
+    if (!h) return;
+    Win *w = win_find(GetAncestor(h, GA_ROOT));
+    if (!w || w->hidden || w->minimized || !ws_visible(w->ws)) return;
+    HWND fg = GetForegroundWindow();
+    if (fg == w->hwnd) return;
+    if (fg && !win_find(fg) && !is_desktop(fg)) return;
+    phi_log("hover: focus %s", w->exe);
+    focus_win_ex(w, 0);
 }
 
 static void on_location(Win *w)
@@ -1329,7 +1489,7 @@ static void on_location(Win *w)
         return;
     }
     if (!zoomed && ws->fs == w && ws->fs_mode == 2) {
-        ws->fs = NULL;
+        fs_clear(ws);
         structural_change();
         SetTimer(g.msgwnd, T_RETILE, 60, NULL);
         return;
@@ -1337,12 +1497,22 @@ static void on_location(Win *w)
     if (ws->fs == w || w->floating || !w->has_placed) return;
     RECT r;
     if (!GetWindowRect(h, &r) || EqualRect(&r, &w->placed)) return;
-    /* something else moved a tiled window: put it back, but don't fight forever
-     * (apps with a minimum size win after a few tries) */
+    /* something else moved a tiled window: put it back, but don't fight forever */
     if (w->fix_epoch != g.epoch) { w->fix_epoch = g.epoch; w->fix_count = 0; }
-    if (w->fix_count >= 4) return;
+    if (w->fix_count < 4) {
+        w->fix_count++;
+        SetTimer(g.msgwnd, T_RETILE, 80, NULL);
+        return;
+    }
+    if (w->fix_count > 4) return;
+    /* it insists: it has a minimum size we did not know, or one that cannot fit */
     w->fix_count++;
-    SetTimer(g.msgwnd, T_RETILE, 80, NULL);
+    int mw = w->min_w, mh = w->min_h;
+    read_min_size(w);
+    phi_log("%p keeps %ldx%ld instead of %ldx%ld (minimum %dx%d)", (void *)h,
+            (long)(r.right - r.left), (long)(r.bottom - r.top),
+            (long)(w->placed.right - w->placed.left), (long)(w->placed.bottom - w->placed.top), w->min_w, w->min_h);
+    if (mw != w->min_w || mh != w->min_h) SetTimer(g.msgwnd, T_RETILE, 80, NULL);
 }
 
 static void on_drag_end(Win *w)
@@ -1360,7 +1530,7 @@ static void on_drag_end(Win *w)
         if (ws_visible(w->ws) && mi != g.ws[w->ws].mon) {
             Workspace *s = &g.ws[w->ws];
             if (s->focus == w) s->focus = ws_mru(w->ws, w, 0);
-            if (s->fs == w) s->fs = NULL;
+            if (s->fs == w) fs_clear(s);
             w->ws = g.mon[mi].ws;
             g.ws[w->ws].focus = w;
             g.cur_mon = mi;
@@ -1445,7 +1615,7 @@ static void CALLBACK on_event(HWINEVENTHOOK hook, DWORD ev, HWND h, LONG obj, LO
     case EVENT_SYSTEM_MINIMIZESTART:
         if (w && !w->minimized) {
             w->minimized = 1;
-            if (g.ws[w->ws].fs == w) g.ws[w->ws].fs = NULL;
+            if (g.ws[w->ws].fs == w) fs_clear(&g.ws[w->ws]);
             tile_remove(w);
             structural_change();
             apply_ws(w->ws);
@@ -1457,6 +1627,7 @@ static void CALLBACK on_event(HWINEVENTHOOK hook, DWORD ev, HWND h, LONG obj, LO
             if (!w->floating) tile_insert(w, NULL, -1, NULL);
             structural_change();
             apply_ws(w->ws);
+            SetTimer(g.msgwnd, T_SETTLE1, 150, NULL);   /* it may still be iconic right now */
         }
         break;
     case EVENT_SYSTEM_MOVESIZESTART:
@@ -1518,113 +1689,23 @@ static void manage_existing(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* config                                                              */
+/* refresh, log                                                        */
 /* ------------------------------------------------------------------ */
 
-static void apply_follow_mouse(void)
+/* Win+Ctrl+R: rescan monitors, retile everything, reinstall the keyboard hook.
+ * The way out when something external left the layout or the hook in a bad state. */
+void wm_refresh(void)
 {
-    int want = g.cfg->follow_mouse != 0;
-    if (want && !g.follow_mouse_set) {
-        SystemParametersInfoW(SPI_GETACTIVEWINDOWTRACKING, 0, &g.saved_xmouse, 0);
-        SystemParametersInfoW(SPI_GETACTIVEWNDTRKZORDER, 0, &g.saved_xmouse_z, 0);
-        SystemParametersInfoW(SPI_GETACTIVEWNDTRKTIMEOUT, 0, &g.saved_xmouse_delay, 0);
-        SystemParametersInfoW(SPI_SETACTIVEWINDOWTRACKING, 0, (PVOID)(UINT_PTR)TRUE, SPIF_SENDCHANGE);
-        SystemParametersInfoW(SPI_SETACTIVEWNDTRKZORDER, 0, (PVOID)(UINT_PTR)FALSE, SPIF_SENDCHANGE);
-        SystemParametersInfoW(SPI_SETACTIVEWNDTRKTIMEOUT, 0, (PVOID)(UINT_PTR)100, SPIF_SENDCHANGE);
-        g.follow_mouse_set = 1;
-    } else if (!want && g.follow_mouse_set) {
-        SystemParametersInfoW(SPI_SETACTIVEWINDOWTRACKING, 0, (PVOID)(UINT_PTR)g.saved_xmouse, SPIF_SENDCHANGE);
-        SystemParametersInfoW(SPI_SETACTIVEWNDTRKZORDER, 0, (PVOID)(UINT_PTR)g.saved_xmouse_z, SPIF_SENDCHANGE);
-        SystemParametersInfoW(SPI_SETACTIVEWNDTRKTIMEOUT, 0, (PVOID)(UINT_PTR)g.saved_xmouse_delay, SPIF_SENDCHANGE);
-        g.follow_mouse_set = 0;
-    }
+    phi_log("refresh");
+    keys_rehook();
+    monitors_refresh();
 }
 
-static void cfg_file_time(FILETIME *t)
-{
-    WIN32_FILE_ATTRIBUTE_DATA a;
-    if (GetFileAttributesExW(g.cfg_path, GetFileExInfoStandard, &a)) *t = a.ftLastWriteTime;
-    else ZeroMemory(t, sizeof *t);
-}
-
-static void write_default_config(void)
-{
-    HRSRC r = FindResourceW(g.inst, MAKEINTRESOURCEW(2), MAKEINTRESOURCEW(10) /* RT_RCDATA */);
-    HGLOBAL hg = r ? LoadResource(g.inst, r) : NULL;
-    const void *data = hg ? LockResource(hg) : NULL;
-    DWORD size = r ? SizeofResource(g.inst, r) : 0;
-    if (!data || !size) return;
-    wchar_t dir[MAX_PATH];
-    lstrcpynW(dir, g.cfg_path, MAX_PATH);
-    for (wchar_t *p = dir + lstrlenW(dir); p > dir; p--) if (*p == L'\\') { *p = 0; break; }
-    ensure_dir(dir);
-    HANDLE f = CreateFileW(g.cfg_path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) return;
-    DWORD wr;
-    WriteFile(f, data, size, &wr, NULL);
-    CloseHandle(f);
-    phi_log("wrote default config");
-}
-
-void wm_reload(int user)
-{
-    PhiConfig *nc = g.cfg == &cfg_a ? &cfg_b : &cfg_a;
-    phi_config_defaults(nc);
-    char *text = read_file_utf8(g.cfg_path);
-    if (!text) {
-        phi_log("cannot read config");
-        if (user) tray_balloon(L"phiwm", L"Could not read the config file.");
-        if (!g.cfg) g.cfg = nc;   /* first start: run on defaults */
-        else return;
-    } else {
-        phi_config_parse(nc, text);
-        HeapFree(GetProcessHeap(), 0, text);
-        g.cfg = nc;
-    }
-    cfg_file_time(&g.cfg_time);
-    g.cfg_gen++;
-    keys_set_binds(g.cfg, g.cfg_gen);
-    apply_follow_mouse();
-
-    for (int i = 0; i < g.nwins; i++) {
-        Win *w = g.wins[i];
-        int st = w->border_state;
-        w->border_state = -1;
-        set_border(w, st < 1 ? 1 : st);
-        set_corners(w, 0);
-    }
-    structural_change();
-    apply_all();
-    tray_update();
-
-    for (int i = 0; i < g.cfg->nexec; i++) run_command(g.cfg->exec[i]);
-
-    phi_log("config loaded: %d binds, %d rules, %d error(s)", g.cfg->nbinds, g.cfg->nrules, g.cfg->nerr);
-    for (int i = 0; i < g.cfg->nerr && i < PHI_MAX_ERRS; i++) phi_log("  config: %s", g.cfg->err[i]);
-    if (g.cfg->nerr) {
-        wchar_t msg[256], first[200];
-        wide_from_utf8(g.cfg->err[0], first, 200);
-        _snwprintf(msg, 256, L"%d problem(s) in phiwm.conf\n%ls", g.cfg->nerr, first);
-        msg[255] = 0;
-        tray_balloon(L"phiwm config", msg);
-    }
-}
-
-void wm_open_config(int what)
+void wm_open_log(void)
 {
     wchar_t path[MAX_PATH];
-    if (what == 1) {
-        lstrcpynW(path, g.cfg_path, MAX_PATH);
-        for (wchar_t *p = path + lstrlenW(path); p > path; p--) if (*p == L'\\') { *p = 0; break; }
-        ShellExecuteW(NULL, L"open", path, NULL, NULL, SW_SHOWNORMAL);
-        return;
-    }
-    if (what == 2) {
-        _snwprintf(path, MAX_PATH, L"%ls\\phiwm.log", g.data_dir);
-        path[MAX_PATH - 1] = 0;
-    } else {
-        lstrcpynW(path, g.cfg_path, MAX_PATH);
-    }
+    _snwprintf(path, MAX_PATH, L"%ls\\phiwm.log", g.data_dir);
+    path[MAX_PATH - 1] = 0;
     if ((INT_PTR)ShellExecuteW(NULL, L"open", path, NULL, NULL, SW_SHOWNORMAL) <= 32)
         ShellExecuteW(NULL, L"open", L"notepad.exe", path, NULL, SW_SHOWNORMAL);
 }
@@ -1649,12 +1730,13 @@ static void cleanup(void)
         Win *w = g.wins[i];
         if (w->hidden) show_owned(w);
         if (!IsWindow(w->hwnd)) continue;
+        if (w->fs_styled) fs_style(w, 0);
         if (w->hidden) ShowWindowAsync(w->hwnd, SW_SHOWNA);
         COLORREF c = COLOR_DEFAULT;
         DwmSetWindowAttribute(w->hwnd, A_BORDER_COLOR, &c, sizeof c);
         set_corners(w, 1);
+        set_transitions(w->hwnd, 0);
     }
-    if (g.cfg) { g.cfg->follow_mouse = 0; apply_follow_mouse(); }
     tray_remove();
     wchar_t path[MAX_PATH];
     hidden_list_path(path);
@@ -1668,6 +1750,8 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS *e)
             e->ExceptionRecord->ExceptionAddress);
     for (int i = 0; i < g.nwins; i++) {
         Win *w = g.wins[i];
+        set_transitions(w->hwnd, 0);
+        if (w->fs_styled) fs_style(w, 0);
         if (!w->hidden) continue;
         ShowWindowAsync(w->hwnd, SW_SHOWNA);
         for (int k = 0; k < w->nowned && k < 16; k++) ShowWindowAsync(w->owned[k], SW_SHOWNA);
@@ -1687,6 +1771,7 @@ static void handle_ipc(const char *msg)
     if (*arg) *arg++ = 0;
     while (*arg == ' ') arg++;
     if (!phi_dispatcher_known(disp)) { phi_log("ipc: unknown dispatcher %s", disp); return; }
+    phi_log("ipc: %s %s", disp, arg);
     dispatch(disp, arg);
 }
 
@@ -1694,8 +1779,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_PHI_BIND:
-        if ((unsigned)lp == g.cfg_gen && (int)wp >= 0 && (int)wp < g.cfg->nbinds) {
-            const PhiBind *b = &g.cfg->binds[wp];
+        if ((int)wp >= 0 && (int)wp < phi_nbinds) {
+            const PhiBind *b = &phi_binds[wp];
+            phi_log("bind: %s %s", b->disp, b->arg);
             dispatch(b->disp, b->arg);
         }
         return 0;
@@ -1734,17 +1820,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (w) mark_active(w);
             }
             break;
-        case T_CFGWATCH: {
-            FILETIME t;
-            cfg_file_time(&t);
-            if (CompareFileTime(&t, &g.cfg_time) != 0 && (t.dwLowDateTime || t.dwHighDateTime)) {
-                g.cfg_time = t;
-                wm_reload(0);
-            }
-            break;
-        }
         case T_REHOOK:
             keys_rehook();
+            break;
+        case T_MOUSE:
+            mouse_tick();
             break;
         case T_MONITORS:
             KillTimer(h, T_MONITORS);
@@ -1795,7 +1875,6 @@ static int run_client(int argc, wchar_t **argv)
         console_print("phiwm " PHI_VERSION_STR " - dwindle tiling for Windows\n\n"
                       "  phiwm                     start the window manager\n"
                       "  phiwm dispatch <d> [arg]  run a dispatcher, e.g. phiwm dispatch workspace 3\n"
-                      "  phiwm reload              reload the config\n"
                       "  phiwm quit                quit and show all windows\n");
         return 0;
     }
@@ -1825,15 +1904,11 @@ static int run_client(int argc, wchar_t **argv)
 
 static void init_paths(void)
 {
-    wchar_t local[MAX_PATH], home[MAX_PATH];
+    wchar_t local[MAX_PATH];
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH)) lstrcpyW(local, L"C:\\");
     _snwprintf(g.data_dir, MAX_PATH, L"%ls\\phiwm", local);
     g.data_dir[MAX_PATH - 1] = 0;
     ensure_dir(g.data_dir);
-    if (GetEnvironmentVariableW(L"PHIWM_CONFIG", g.cfg_path, MAX_PATH)) return;
-    if (!GetEnvironmentVariableW(L"USERPROFILE", home, MAX_PATH)) lstrcpyW(home, L"C:\\");
-    _snwprintf(g.cfg_path, MAX_PATH, L"%ls\\.config\\phiwm\\phiwm.conf", home);
-    g.cfg_path[MAX_PATH - 1] = 0;
 }
 
 static int self_is_elevated(void)
@@ -1881,10 +1956,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     if (!g.msgwnd) { phi_log("cannot create window"); return 1; }
     ChangeWindowMessageFilterEx(g.msgwnd, tray_taskbar_created_msg(), MSGFLT_ALLOW, NULL);
 
-    if (GetFileAttributesW(g.cfg_path) == INVALID_FILE_ATTRIBUTES) write_default_config();
-    g.cfg = NULL;
     monitors_init();
-    wm_reload(0);
 
     /* hooks first: windows that appear while we scan are picked up once the loop runs
      * (manage() ignores windows it already has) */
@@ -1894,17 +1966,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
     save_hidden_list();
     if (!keys_start(g.msgwnd)) phi_log("keyboard hook failed (%lu)", GetLastError());
     tray_add();
-    if (g.cfg->nerr) {
-        wchar_t msg[256], first[200];
-        wide_from_utf8(g.cfg->err[0], first, 200);
-        _snwprintf(msg, 256, L"%d problem(s) in phiwm.conf\n%ls", g.cfg->nerr, first);
-        msg[255] = 0;
-        tray_balloon(L"phiwm config", msg);
-    }
-
-    for (int i = 0; i < g.cfg->nexec_once; i++) run_command(g.cfg->exec_once[i]);
-    SetTimer(g.msgwnd, T_CFGWATCH, 1000, NULL);
     SetTimer(g.msgwnd, T_REHOOK, 5 * 60 * 1000, NULL);
+    if (PHI_FOLLOW_MOUSE) { GetCursorPos(&mouse_last); SetTimer(g.msgwnd, T_MOUSE, 40, NULL); }
 
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {

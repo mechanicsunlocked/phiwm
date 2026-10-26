@@ -3,7 +3,7 @@
 #   Windows MSYS2:  make CROSS=       in a UCRT64/MINGW64 shell
 #   Tests (native): make test
 
-VERSION := 0.1.0
+VERSION := 0.2.0
 CROSS   ?= x86_64-w64-mingw32-
 CC      := $(CROSS)gcc
 WINDRES := $(CROSS)windres
@@ -13,7 +13,7 @@ CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -municode -DUNICOD
 LDFLAGS := -static -s -mwindows -municode
 LIBS    := -luser32 -lgdi32 -lshell32 -ldwmapi -ladvapi32 -lshcore -lole32
 
-SRC := src/wm.c src/keys.c src/tray.c src/util.c src/config.c src/layout.c
+SRC := src/wm.c src/keys.c src/tray.c src/util.c src/defaults.c src/layout.c
 OBJ := $(patsubst src/%.c,build/%.o,$(SRC)) build/phiwm.res.o
 
 all: build/phiwm.exe
@@ -24,7 +24,7 @@ build:
 build/%.o: src/%.c src/*.h | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/phiwm.res.o: res/phiwm.rc res/phiwm.ico res/default.conf res/phiwm.manifest | build
+build/phiwm.res.o: res/phiwm.rc res/phiwm.ico res/phiwm.manifest | build
 	$(WINDRES) -I res res/phiwm.rc -O coff -o $@
 
 build/phiwm.exe: $(OBJ)
@@ -32,9 +32,9 @@ build/phiwm.exe: $(OBJ)
 
 test: | build
 	$(HOSTCC) -std=c99 -Wall -Wextra -O1 -g -Isrc tests/test_layout.c src/layout.c -o build/test_layout
-	$(HOSTCC) -std=c99 -Wall -Wextra -O1 -g -Isrc tests/test_config.c src/config.c -o build/test_config -lm
+	$(HOSTCC) -std=c99 -Wall -Wextra -O1 -g -Isrc tests/test_defaults.c src/defaults.c -o build/test_defaults
 	./build/test_layout
-	./build/test_config res/default.conf
+	./build/test_defaults
 
 dist: build/phiwm.exe
 	rm -f build/phiwm-$(VERSION)-x64.zip

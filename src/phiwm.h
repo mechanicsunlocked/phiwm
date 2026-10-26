@@ -20,15 +20,15 @@
 
 #include <windows.h>
 #include "layout.h"
-#include "config.h"
+#include "defaults.h"
 
-#define PHI_VERSION_STR "0.1.0"
+#define PHI_VERSION_STR "0.2.0"
 #define PHI_MAX_WS      10
 #define PHI_MAX_MON     8
 #define PHI_MAX_WIN     512
 
 /* window messages */
-#define WM_PHI_BIND     (WM_APP + 1)   /* wParam = bind index, lParam = config generation */
+#define WM_PHI_BIND     (WM_APP + 1)   /* wParam = index into phi_binds */
 #define WM_PHI_TRAY     (WM_APP + 2)
 #define WM_PHI_REHOOK   (WM_APP + 3)
 
@@ -49,6 +49,9 @@ typedef struct Win {
     int      has_float_rect;
     RECT     margin;        /* invisible frame: left/top/right/bottom, in px */
     int      has_margin;
+    int      min_w, min_h;  /* smallest visible size the app accepts, physical px; 0 = none */
+    LONG     fs_style, fs_exstyle; /* window styles before fullscreen took the frame away */
+    int      fs_styled;
     PhiRect  tile;          /* last visual rect phiwm gave it */
     RECT     placed;        /* last outer rect phiwm asked for */
     int      has_placed;
@@ -79,11 +82,7 @@ typedef struct {
 typedef struct {
     HINSTANCE inst;
     HWND      msgwnd;
-    PhiConfig *cfg;
-    unsigned  cfg_gen;
-    wchar_t   cfg_path[MAX_PATH];
     wchar_t   data_dir[MAX_PATH];
-    FILETIME  cfg_time;
 
     Win      *wins[PHI_MAX_WIN];
     int       nwins;
@@ -100,9 +99,6 @@ typedef struct {
     int       focus_tries;
     int       self_elevated;
     int       quitting;
-    int       follow_mouse_set;
-    BOOL      saved_xmouse, saved_xmouse_z;
-    DWORD     saved_xmouse_delay;
     HWINEVENTHOOK hooks[8];
     int       nhooks;
 } Globals;
@@ -114,29 +110,26 @@ void  phi_log(const char *fmt, ...);
 void  log_open(void);
 void  utf8_from_wide(const wchar_t *w, char *out, int n);
 void  wide_from_utf8(const char *s, wchar_t *out, int n);
-char *read_file_utf8(const wchar_t *path);
 int   ensure_dir(const wchar_t *path);
 
 /* keys.c */
 int   keys_start(HWND target);
 void  keys_stop(void);
-void  keys_set_binds(const PhiConfig *c, unsigned gen);
 void  keys_rehook(void);
 
 /* tray.c */
 void  tray_add(void);
 void  tray_remove(void);
 void  tray_update(void);
-void  tray_balloon(const wchar_t *title, const wchar_t *text);
 void  tray_menu(void);
 UINT  tray_taskbar_created_msg(void);
 int   autostart_get(void);
 void  autostart_set(int on);
 
 /* wm.c, used by tray.c */
-void  wm_reload(int user);
+void  wm_refresh(void);
 void  wm_quit(void);
-void  wm_open_config(int folder);
+void  wm_open_log(void);
 int   wm_focused_ws_number(void);
 
 #endif

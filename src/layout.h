@@ -18,6 +18,7 @@ struct PhiNode {
     int      locked;    /* inner node: direction fixed (preserve_split / togglesplit) */
     double   ratio;     /* inner node: share of child[0], 0.05 .. 0.95 */
     PhiRect  box;       /* box from the last layout pass, gaps not applied */
+    int      min_w, min_h; /* leaf: the window's minimum size; inner node: what its children need */
 };
 
 typedef struct { PhiNode *root; } PhiTree;
@@ -39,6 +40,11 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
 
 /* Remove a leaf; its sibling takes over the parent's box. Frees the leaf. */
 void     phi_remove(PhiTree *t, PhiNode *leaf);
+
+/* The smallest box a leaf accepts (0 = no minimum). A split that cannot hold both
+ * children's minimums side by side is stacked instead, and vice versa; when there
+ * is room for both, the ratio is clamped so each child gets its minimum. */
+void     phi_set_min(PhiNode *leaf, int w, int h);
 
 /* Recompute every node's box inside `area`. */
 void     phi_layout(PhiTree *t, PhiRect area, const PhiDwindle *cfg);
