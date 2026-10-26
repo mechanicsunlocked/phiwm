@@ -14,6 +14,7 @@
 #define PHI_INACTIVE_BORDER  0x595959
 #define PHI_ROUNDING         1          /* Windows 11 rounded corners */
 #define PHI_FOLLOW_MOUSE     1          /* hovering a window focuses it, like hyprland */
+#define PHI_MAX_TILES        8          /* tiled windows per workspace; the next opens on an empty one */
 
 enum { PHI_MOD_SUPER = 1, PHI_MOD_SHIFT = 2, PHI_MOD_CTRL = 4, PHI_MOD_ALT = 8 };
 

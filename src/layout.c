@@ -85,6 +85,18 @@ void phi_set_min(PhiNode *leaf, int w, int h)
     leaf->min_h = h;
 }
 
+int phi_can_split(const PhiNode *target, const PhiDwindle *cfg, int min_w, int min_h)
+{
+    if (!target) return 1;
+    PhiRect b = target->box;
+    double keep = clampd(cfg ? cfg->ratio : 0.5, RATIO_MIN, RATIO_MAX);
+    double small = keep < 0.5 ? keep : 1.0 - keep;   /* the smaller share of the two */
+    int w = imax(target->min_w, min_w), h = imax(target->min_h, min_h);
+    if (w <= (int)(b.w * small) && h <= b.h) return 1;   /* side by side */
+    if (w <= b.w && h <= (int)(b.h * small)) return 1;   /* stacked */
+    return 0;
+}
+
 PhiNode *phi_first(const PhiTree *t)
 {
     PhiNode *n = t->root;
@@ -135,15 +147,19 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
     split->horiz = want_horiz(b, cfg);
     split->locked = cfg ? cfg->preserve_split : 1;
 
-    int mode = force >= 0 ? force : (cfg ? cfg->force_split : 2);
     int new_first;
-    if (mode == 1) new_first = 1;
-    else if (mode == 2) new_first = 0;
-    else {
+    if (force == 1) new_first = 1;
+    else if (force == 2) new_first = 0;
+    else if (force == 0) {
         int inside = px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h;
         if (!inside) new_first = 0;
         else if (split->horiz) new_first = px < b.x + b.w / 2;
         else new_first = py < b.y + b.h / 2;
+    } else {
+        /* clockwise: right, below, left, above, by how deep the target sits */
+        int depth = 0;
+        for (PhiNode *p = split->parent; p; p = p->parent) depth++;
+        new_first = depth % 4 >= 2;
     }
 
     double keep = clampd(cfg ? cfg->ratio : 0.5, RATIO_MIN, RATIO_MAX);

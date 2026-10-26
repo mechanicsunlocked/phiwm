@@ -3,9 +3,9 @@
 #include <ctype.h>
 #include <string.h>
 
-/* Dwindle: the existing window keeps 61.8% (golden ratio), the new one goes
- * right/bottom, and a split keeps its direction once made. */
-const PhiDwindle phi_dwindle = { 0.618, 2, 1, 1.0 };
+/* Dwindle: every new window takes half of the focused one, clockwise around the
+ * spiral, and a split keeps its direction once made. */
+const PhiDwindle phi_dwindle = { 0.5, 1, 1.0 };
 
 /* ---------- keybinds ---------- */
 

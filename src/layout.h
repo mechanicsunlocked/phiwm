@@ -24,16 +24,17 @@ struct PhiNode {
 typedef struct { PhiNode *root; } PhiTree;
 
 typedef struct {
-    double ratio;          /* share the existing window keeps when it is split (0.618 = golden) */
-    int    force_split;    /* 0 = side of the cursor, 1 = new window left/top, 2 = new window right/bottom */
+    double ratio;          /* share the existing window keeps when it is split (0.5 = half) */
     int    preserve_split; /* keep each split's direction once it is made */
     double width_mult;     /* split side by side when w >= h * width_mult */
 } PhiDwindle;
 
 enum { PHI_EDGE_LEFT, PHI_EDGE_RIGHT, PHI_EDGE_TOP, PHI_EDGE_BOTTOM };
 
-/* Insert `win` by splitting `target` (NULL = last leaf). `force` overrides
- * cfg->force_split when >= 0. (px, py) is the point used for force_split 0.
+/* Insert `win` by splitting `target` (NULL = last leaf). By default the new window
+ * goes clockwise around the spiral: right of the first window, below the second,
+ * left of the third, above the fourth, and so on. `force` >= 0 overrides that:
+ * 0 = the side of point (px, py), 1 = new window left/top, 2 = right/bottom.
  * Returns the new leaf, or NULL on allocation failure. */
 PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
                     const PhiDwindle *cfg, int force, int px, int py);
@@ -46,6 +47,10 @@ void     phi_remove(PhiTree *t, PhiNode *leaf);
  * is never changed for it: a leaf that still does not fit gets a box that is too
  * small, and the caller decides what to do with the window. */
 void     phi_set_min(PhiNode *leaf, int w, int h);
+
+/* Whether `target`'s box, split at the ratio, has room for its own minimum and a
+ * new window needing (min_w, min_h), side by side or stacked. NULL target: yes. */
+int      phi_can_split(const PhiNode *target, const PhiDwindle *cfg, int min_w, int min_h);
 
 /* Recompute every node's box inside `area`. */
 void     phi_layout(PhiTree *t, PhiRect area, const PhiDwindle *cfg);

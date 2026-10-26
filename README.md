@@ -1,7 +1,7 @@
 # phiwm
 
-Dwindle tiling for Windows 11. Every new window splits the focused one at the golden ratio,
-so the existing window keeps 61.8% and windows spiral in toward the bottom-right. One layout,
+Dwindle tiling for Windows 11. Every new window takes half of the focused one, clockwise:
+right of the first, below the second, left of the third, above the fourth. One layout,
 one set of keys, nothing to configure: install it and it works.
 
 - Plain C, one ~100 KB exe, no services, no helper daemons, no runtime, no config file,
@@ -47,8 +47,8 @@ or onto another monitor to move it there.
 ## Built in, not configured
 
 Everything that used to be a config file is one table in `src/defaults.c`: the keys above,
-the layout constants (gaps 5/10 px, golden ratio, new windows go right/bottom, splits keep
-their direction) and the window rules. Change it there and rebuild.
+the layout constants (gaps 5/10 px, halves, clockwise, splits keep their direction, at most
+8 windows per workspace) and the window rules. Change it there and rebuild.
 
 Window rules: Picture-in-Picture windows, Calculator, Explorer's copy dialog and PowerToys
 windows float. Dialogs, tool windows and fixed-size windows float on their own.
@@ -74,13 +74,15 @@ Workspace arguments: `3`, `+1`, `-1`, `e+1`, `e-1`, `previous`, `empty`.
 - Win+F covers the whole monitor, taskbar included, with the title bar gone. Leaving
   fullscreen, switching workspace, or quitting phiwm puts the frame back.
 - An app that maximizes itself is left maximized until it restores.
-- A split's ratio is the golden ratio, or what you dragged it to, and never bends to what
-  sits inside: the first window keeps its 61.8% however many windows follow. The layout
-  does know each app's minimum size (Windows Terminal wants about 100 columns): two windows
-  that cannot sit side by side are stacked instead. A window that still cannot shrink to
-  its tile keeps its minimum, slid back inside the monitor, so it overlaps a neighbour
-  rather than leaving the screen; the log says so. An app that only announces its minimum
-  after it is up (Steam) is learned the first time it refuses a tile.
+- A split is half and half, or what you dragged it to, and never bends to what sits
+  inside. The layout does know each app's minimum size (Windows Terminal wants about 100
+  columns): two windows that cannot sit side by side are stacked instead.
+- A workspace takes new windows only while they fit. When the focused window's half would
+  be too small for it or for the newcomer, or the workspace already holds 8 windows, the
+  new window opens on the next empty workspace and you follow it. An app that announces
+  its minimum only after it is up (Steam wants 2020x1200 px at 200%) is caught the moment
+  it refuses its tile and moved the same way. A window that cannot fit and has nowhere to
+  go keeps its minimum, slid back inside the monitor; the log says so.
 - Log: `%LOCALAPPDATA%\phiwm\phiwm.log` (previous run: `phiwm.old.log`). Every managed window
   is logged with its class and exe, and so is every keybind and workspace switch.
 

@@ -664,21 +664,55 @@ static void focus_desktop_on(int m)
 /* tiling                                                              */
 /* ------------------------------------------------------------------ */
 
+/* The leaf a new window on w's workspace splits: a given target, else the focused
+ * window, else the most recently used one. NULL means the last leaf. */
+static PhiNode *split_target(Win *w, Win *target_win)
+{
+    Workspace *ws = &g.ws[w->ws];
+    if (target_win && target_win != w && target_win->node && target_win->ws == w->ws) return target_win->node;
+    if (ws->focus && ws->focus != w && ws->focus->node) return ws->focus->node;
+    Win *m = ws_mru(w->ws, w, 1);
+    return m ? m->node : NULL;
+}
+
 static void tile_insert(Win *w, Win *target_win, int force, const POINT *pt)
 {
     Workspace *ws = &g.ws[w->ws];
     if (ws->mon < 0) ws->mon = g.cur_mon;
-    PhiNode *target = NULL;
-    if (target_win && target_win != w && target_win->node && target_win->ws == w->ws) target = target_win->node;
-    if (!target && ws->focus && ws->focus != w && ws->focus->node) target = ws->focus->node;
-    if (!target) {
-        Win *m = ws_mru(w->ws, w, 1);
-        if (m) target = m->node;
-    }
+    PhiNode *target = split_target(w, target_win);
     POINT p;
     if (pt) p = *pt; else GetCursorPos(&p);
     PhiRect area = ws_area(w->ws, NULL);
     w->node = phi_insert(&ws->tree, target, w, area, &phi_dwindle, force, p.x, p.y);
+}
+
+/* The next empty workspace after `cur`, or -1. */
+static int next_empty_ws(int cur)
+{
+    for (int k = 1; k < PHI_MAX_WS; k++) {
+        int i = (cur + k) % PHI_MAX_WS;
+        if (ws_is_empty(i) && !ws_visible(i)) return i;
+    }
+    return -1;
+}
+
+/* Where a new tiled window on `cur` should open: there, unless the workspace holds
+ * PHI_MAX_TILES windows already or the half it would get is too small for it or for
+ * the window it splits. Then the next empty workspace takes it (-1: stay). */
+static int tile_overflow_ws(int cur, Win *w)
+{
+    Workspace *ws = &g.ws[cur];
+    int n = phi_count(&ws->tree);
+    if (n == 0) return -1;
+    int full = n >= PHI_MAX_TILES;
+    if (!full) {
+        int gin;
+        ws_area(cur, &gin);
+        PhiNode *t = split_target(w, NULL);
+        if (!t) t = phi_last(&ws->tree);
+        full = !phi_can_split(t, &phi_dwindle, w->min_w ? w->min_w + 2 * gin : 0, w->min_h ? w->min_h + 2 * gin : 0);
+    }
+    return full ? next_empty_ws(cur) : -1;
 }
 
 static void tile_remove(Win *w)
@@ -756,6 +790,15 @@ static Win *manage(HWND h, int startup)
 
     read_margins(w);
     read_min_size(w);
+    if (!startup && !w->floating && !w->minimized && target == cur_ws()) {
+        int n = tile_overflow_ws(target, w);
+        if (n >= 0) {
+            phi_log("%p: workspace %d is full, opening on %d", (void *)h, target + 1, n + 1);
+            w->ws = target = n;
+            silent = 0;
+            if (g.ws[target].mon < 0) g.ws[target].mon = g.cur_mon;
+        }
+    }
     if (!w->floating && !w->minimized) tile_insert(w, NULL, -1, NULL);
     w->border_state = -1;
     set_border(w, 1);
@@ -1525,7 +1568,14 @@ static void on_location(Win *w)
         if (w->min_w > w->tile.w || w->min_h > w->tile.h) {
             if (mw == w->min_w && mh == w->min_h) return;
             phi_log("%p keeps %ldx%ld instead of %ldx%ld: minimum %dx%d", (void *)h, rw, rh, pw, ph, w->min_w, w->min_h);
-            SetTimer(g.msgwnd, T_RETILE, 80, NULL);
+            /* the focused newcomer that cannot share this workspace gets an empty one */
+            int n = ws->focus == w && phi_count(&ws->tree) > 1 ? next_empty_ws(w->ws) : -1;
+            if (n >= 0) {
+                phi_log("%p: too big for workspace %d, moving to %d", (void *)h, w->ws + 1, n + 1);
+                move_to_ws(w, n, MOVE_FOLLOW, NULL, NULL);
+            } else {
+                SetTimer(g.msgwnd, T_RETILE, 80, NULL);
+            }
             return;
         }
     }
