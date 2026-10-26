@@ -33,29 +33,39 @@ int main(void)
     phi_layout(&t, area, &half);
     CHECK(focus->box.w == area.w && focus->box.h == area.h);
 
-    /* spiral: always split the newest window */
+    /* the layout picks what to split: the least-split window, clockwise */
     for (long i = 2; i <= 5; i++) {
-        focus = phi_insert(&t, focus, (void *)(size_t)i, area, &half, -1, 0, 0);
+        focus = phi_insert(&t, NULL, (void *)(size_t)i, area, &half, -1, 0, 0);
         CHECK(focus != NULL);
     }
     phi_layout(&t, area, &half);
     CHECK(phi_count(&t) == 5);
-    printf("spiral, 5 windows:\n");
+    printf("halves clockwise, 5 windows:\n");
     dump(&t, area, 5);
 
     PhiNode *w1 = find(&t, (void *)1), *w2 = find(&t, (void *)2), *w3 = find(&t, (void *)3);
     PhiNode *w4 = find(&t, (void *)4), *w5 = find(&t, (void *)5);
-    /* halves, clockwise: 2 right of 1, 3 below 2, 4 left of 3, 5 above 4 */
-    CHECK(w1->box.w == 1270 && w1->box.h == 1420);
-    CHECK(w2->box.x == w1->box.x + w1->box.w && w2->box.w == 1270 && w2->box.h == 710);
-    CHECK(w3->box.y == w2->box.y + w2->box.h && w3->box.h == 710 && w3->box.w == 635);
-    CHECK(w4->box.x + w4->box.w == w3->box.x && w4->box.w == 635);
-    CHECK(w5->box.x == w4->box.x && w5->box.y == w3->box.y && w5->box.h == 355);
-    CHECK(w4->box.y == w5->box.y + w5->box.h && w4->box.h == 355);
+    /* 2 right of 1, 3 below 2, 4 below 1, 5 right of 2 (the quarters, clockwise) */
+    CHECK(w1->box.x == 10 && w1->box.y == 10 && w1->box.w == 1270 && w1->box.h == 710);
+    CHECK(w2->box.x == 1280 && w2->box.y == 10 && w2->box.w == 635 && w2->box.h == 710);
+    CHECK(w3->box.x == 1280 && w3->box.y == 720 && w3->box.w == 1270 && w3->box.h == 710);
+    CHECK(w4->box.x == 10 && w4->box.y == 720 && w4->box.w == 1270 && w4->box.h == 710);
+    CHECK(w5->box.x == 1915 && w5->box.y == 10 && w5->box.w == 635 && w5->box.h == 710);
+    /* 6, 7, 8 take the remaining quarters in turn: eight equal windows */
+    for (long i = 6; i <= 8; i++) CHECK(phi_insert(&t, NULL, (void *)(size_t)i, area, &half, -1, 0, 0) != NULL);
+    phi_layout(&t, area, &half);
+    PhiNode *w6 = find(&t, (void *)6), *w7 = find(&t, (void *)7), *w8 = find(&t, (void *)8);
+    CHECK(w6->box.x == 1915 && w6->box.y == 720);   /* right of 3 */
+    CHECK(w7->box.x == 645 && w7->box.y == 720);    /* right of 4 */
+    CHECK(w8->box.x == 645 && w8->box.y == 10);     /* right of 1 */
+    for (PhiNode *n = phi_first(&t); n; n = phi_next(n)) CHECK(n->box.w == 635 && n->box.h == 710);
+    phi_remove(&t, w8); phi_remove(&t, w7); phi_remove(&t, w6);
+    phi_layout(&t, area, &half);
+    CHECK(phi_count(&t) == 5 && w1->box.w == 1270);
 
     /* gaps: 2 * gap_in between neighbours, none added on outer edges */
     PhiRect r1 = phi_tile_rect(w1, area, 5), r2 = phi_tile_rect(w2, area, 5);
-    CHECK(r1.x == area.x && r1.y == area.y && r1.h == area.h);
+    CHECK(r1.x == area.x && r1.y == area.y && r1.h == 710 - 5);   /* 4 sits below 1 */
     CHECK(r2.x - (r1.x + r1.w) == 10);
 
     /* every leaf box tiles the area exactly: total area matches */

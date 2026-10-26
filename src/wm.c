@@ -664,15 +664,13 @@ static void focus_desktop_on(int m)
 /* tiling                                                              */
 /* ------------------------------------------------------------------ */
 
-/* The leaf a new window on w's workspace splits: a given target, else the focused
- * window, else the most recently used one. NULL means the last leaf. */
+/* The leaf a new window on w's workspace splits: a given target (drag & drop), else
+ * the layout's choice: the least-split window, clockwise. NULL on an empty workspace. */
 static PhiNode *split_target(Win *w, Win *target_win)
 {
     Workspace *ws = &g.ws[w->ws];
     if (target_win && target_win != w && target_win->node && target_win->ws == w->ws) return target_win->node;
-    if (ws->focus && ws->focus != w && ws->focus->node) return ws->focus->node;
-    Win *m = ws_mru(w->ws, w, 1);
-    return m ? m->node : NULL;
+    return phi_split_target(&ws->tree, ws_area(w->ws, NULL));
 }
 
 static void tile_insert(Win *w, Win *target_win, int force, const POINT *pt)
@@ -709,7 +707,6 @@ static int tile_overflow_ws(int cur, Win *w)
         int gin;
         ws_area(cur, &gin);
         PhiNode *t = split_target(w, NULL);
-        if (!t) t = phi_last(&ws->tree);
         full = !phi_can_split(t, &phi_dwindle, w->min_w ? w->min_w + 2 * gin : 0, w->min_h ? w->min_h + 2 * gin : 0);
     }
     return full ? next_empty_ws(cur) : -1;

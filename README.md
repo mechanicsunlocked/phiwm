@@ -1,8 +1,9 @@
 # phiwm
 
-Dwindle tiling for Windows 11. Every new window takes half of the focused one, clockwise:
-right of the first, below the second, left of the third, above the fourth. One layout,
-one set of keys, nothing to configure: install it and it works.
+Tiling for Windows 11 that halves, clockwise. The second window takes the right half, the
+third halves the right side, the fourth the left, then the quarters go in turn: eight windows
+and the workspace is full. One layout, one set of keys, nothing to configure: install it and
+it works.
 
 - Plain C, one ~100 KB exe, no services, no helper daemons, no runtime, no config file,
   no system setting touched.
@@ -66,7 +67,8 @@ Workspace arguments: `3`, `+1`, `-1`, `e+1`, `e-1`, `previous`, `empty`.
 - Workspace switches are instant: DWM's fade-in/fade-out is switched off per managed window
   (nothing system-wide) and a revealed window is moved and shown in one step.
 - Switching to an empty workspace shows the bare desktop. The tray number says where you are.
-- A new window gets the focus, like in Hyprland, so the next one splits it: the spiral.
+- A new window gets the focus, like in Hyprland. Where it goes does not depend on the
+  focus: it halves the least-split window, the next one clockwise after the last split.
 - Focus follows the mouse, like in Hyprland: hovering a window focuses it. Menus, popups,
   dialogs and Start keep the focus, nothing happens while a button is held or a window is
   being dragged, and the desktop between the gaps is ignored. When phiwm moves the focus

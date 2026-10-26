@@ -21,7 +21,10 @@ struct PhiNode {
     int      min_w, min_h; /* leaf: the window's minimum size; inner node: what its children need */
 };
 
-typedef struct { PhiNode *root; } PhiTree;
+typedef struct {
+    PhiNode *root;
+    double   last;   /* clockwise position (0..4) of the window split last; see phi_split_target */
+} PhiTree;
 
 typedef struct {
     double ratio;          /* share the existing window keeps when it is split (0.5 = half) */
@@ -31,11 +34,16 @@ typedef struct {
 
 enum { PHI_EDGE_LEFT, PHI_EDGE_RIGHT, PHI_EDGE_TOP, PHI_EDGE_BOTTOM };
 
-/* Insert `win` by splitting `target` (NULL = last leaf). By default the new window
- * goes clockwise around the spiral: right of the first window, below the second,
- * left of the third, above the fourth, and so on. `force` >= 0 overrides that:
- * 0 = the side of point (px, py), 1 = new window left/top, 2 = right/bottom.
- * Returns the new leaf, or NULL on allocation failure. */
+/* The leaf a new window splits when none is given: the least-split one, and among
+ * those the next one clockwise after the window that was split last. So the screen
+ * is halved left|right, then the right half top/bottom, then the left half, then
+ * the four quarters in turn. NULL on an empty tree. Boxes must be laid out. */
+PhiNode *phi_split_target(const PhiTree *t, PhiRect area);
+
+/* Insert `win` by splitting `target` (NULL = phi_split_target). The new window goes
+ * right/bottom; `force` >= 0 overrides that: 0 = the side of point (px, py),
+ * 1 = new window left/top, 2 = right/bottom. Returns the new leaf, or NULL on
+ * allocation failure. */
 PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
                     const PhiDwindle *cfg, int force, int px, int py);
 

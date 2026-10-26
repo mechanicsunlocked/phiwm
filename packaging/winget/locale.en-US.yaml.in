@@ -11,8 +11,8 @@ License: MIT
 LicenseUrl: @REPO_URL@/blob/main/LICENSE
 ShortDescription: Dwindle tiling window manager for Windows 11, halves clockwise, nothing to configure.
 Description: |-
-  phiwm tiles windows the way Hyprland's dwindle layout does: every new window takes half
-  of the focused one, clockwise. One layout, one set of keys, no config file: workspaces
+  phiwm halves the screen, clockwise: every new window takes half of the least-split
+  window, up to eight per workspace. One layout, one set of keys, no config file: workspaces
   1-10 per monitor, focus follows the mouse, native Windows 11 border colors, and a single
   small exe with no services or helper daemons.
 Tags:

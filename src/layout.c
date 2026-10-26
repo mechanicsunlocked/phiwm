@@ -128,6 +128,43 @@ int phi_count(const PhiTree *t)
     return c;
 }
 
+/* Where a box sits, clockwise from 3 o'clock: right 0, bottom 1, left 2, top 3
+ * (y grows downwards). The whole area counts as left: that is where its half goes. */
+static double clock_pos(PhiRect b, PhiRect area)
+{
+    double dx = (b.x + b.w / 2.0) - (area.x + area.w / 2.0);
+    double dy = (b.y + b.h / 2.0) - (area.y + area.h / 2.0);
+    double a = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+    if (a == 0) return 2.0;
+    double p = dx / a;
+    return dy >= 0 ? 1 - p : 3 + p;
+}
+
+static int depth_of(const PhiNode *n)
+{
+    int d = 0;
+    while (n->parent) { n = n->parent; d++; }
+    return d;
+}
+
+PhiNode *phi_split_target(const PhiTree *t, PhiRect area)
+{
+    int min_d = -1;
+    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) {
+        int d = depth_of(n);
+        if (min_d < 0 || d < min_d) min_d = d;
+    }
+    PhiNode *next = NULL, *wrap = NULL;
+    double na = 0, wa = 0;
+    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) {
+        if (depth_of(n) != min_d) continue;
+        double a = clock_pos(n->box, area);
+        if (a > t->last + 1e-9 && (!next || a < na)) { next = n; na = a; }
+        if (!wrap || a < wa) { wrap = n; wa = a; }
+    }
+    return next ? next : wrap;
+}
+
 PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
                     const PhiDwindle *cfg, int force, int px, int py)
 {
@@ -136,8 +173,8 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
     leaf->win = win;
     if (!t->root) { t->root = leaf; leaf->box = area; return leaf; }
 
-    if (!target || !is_leaf(target)) target = phi_last(t);
     phi_layout(t, area, cfg);
+    if (!target || !is_leaf(target)) target = phi_split_target(t, area);
 
     PhiNode *split = calloc(1, sizeof *split);
     if (!split) { free(leaf); return NULL; }
@@ -147,19 +184,13 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
     split->horiz = want_horiz(b, cfg);
     split->locked = cfg ? cfg->preserve_split : 1;
 
-    int new_first;
+    int new_first = 0;   /* the new window goes right/bottom */
     if (force == 1) new_first = 1;
-    else if (force == 2) new_first = 0;
     else if (force == 0) {
         int inside = px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h;
         if (!inside) new_first = 0;
         else if (split->horiz) new_first = px < b.x + b.w / 2;
         else new_first = py < b.y + b.h / 2;
-    } else {
-        /* clockwise: right, below, left, above, by how deep the target sits */
-        int depth = 0;
-        for (PhiNode *p = split->parent; p; p = p->parent) depth++;
-        new_first = depth % 4 >= 2;
     }
 
     double keep = clampd(cfg ? cfg->ratio : 0.5, RATIO_MIN, RATIO_MAX);
@@ -169,6 +200,7 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
     leaf->parent = split;
     target->parent = split;
     phi_layout(t, area, cfg);
+    t->last = clock_pos(target->box, area);   /* the next split continues clockwise from here */
     return leaf;
 }
 

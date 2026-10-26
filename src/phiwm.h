@@ -22,7 +22,7 @@
 #include "layout.h"
 #include "defaults.h"
 
-#define PHI_VERSION_STR "0.3.0"
+#define PHI_VERSION_STR "0.3.1"
 #define PHI_MAX_WS      10
 #define PHI_MAX_MON     8
 #define PHI_MAX_WIN     512

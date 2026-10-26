@@ -3,8 +3,8 @@
 #include <ctype.h>
 #include <string.h>
 
-/* Dwindle: every new window takes half of the focused one, clockwise around the
- * spiral, and a split keeps its direction once made. */
+/* Every new window takes half of the least-split window, clockwise (layout.c
+ * phi_split_target), and a split keeps its direction once made. */
 const PhiDwindle phi_dwindle = { 0.5, 1, 1.0 };
 
 /* ---------- keybinds ---------- */
