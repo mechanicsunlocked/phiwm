@@ -52,17 +52,13 @@ static void layout_node(PhiNode *n, PhiRect box, const PhiDwindle *cfg)
     if (is_leaf(n)) return;
     int horiz = n->locked ? n->horiz : want_horiz(box, cfg);
     /* A direction that cannot hold both children's minimums gives way to the other
-     * one when that fits: two wide windows end up stacked instead of overlapping. */
+     * one when that fits: two wide windows end up stacked instead of overlapping.
+     * The ratio itself is never bent: like Hyprland, every split keeps its share no
+     * matter what sits inside, and a window that still does not fit overflows. */
     if (!fits(n, horiz, box) && fits(n, !horiz, box)) { horiz = !horiz; flipped++; }
     n->horiz = horiz;
     int len = horiz ? box.w : box.h;
-    int m0 = horiz ? n->child[0]->min_w : n->child[0]->min_h;
-    int m1 = horiz ? n->child[1]->min_w : n->child[1]->min_h;
     int first = (int)(len * n->ratio + 0.5);
-    if (m0 + m1 <= len) {          /* room for both minimums: the ratio respects them */
-        if (first < m0) first = m0;
-        if (len - first < m1) first = len - m1;
-    }
     PhiRect a = box, b = box;
     if (horiz) { a.w = first; b.x = box.x + first; b.w = box.w - first; }
     else       { a.h = first; b.y = box.y + first; b.h = box.h - first; }

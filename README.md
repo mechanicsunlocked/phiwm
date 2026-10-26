@@ -74,10 +74,13 @@ Workspace arguments: `3`, `+1`, `-1`, `e+1`, `e-1`, `previous`, `empty`.
 - Win+F covers the whole monitor, taskbar included, with the title bar gone. Leaving
   fullscreen, switching workspace, or quitting phiwm puts the frame back.
 - An app that maximizes itself is left maximized until it restores.
-- The layout knows each app's minimum size (Windows Terminal wants about 100 columns): a
-  split that cannot hold two such windows side by side stacks them, and the ratio gives a
-  window its minimum when there is room. A window that still cannot fit keeps its size, and
-  the log says so, instead of jittering.
+- A split's ratio is the golden ratio, or what you dragged it to, and never bends to what
+  sits inside: the first window keeps its 61.8% however many windows follow. The layout
+  does know each app's minimum size (Windows Terminal wants about 100 columns): two windows
+  that cannot sit side by side are stacked instead. A window that still cannot shrink to
+  its tile keeps its minimum, slid back inside the monitor, so it overlaps a neighbour
+  rather than leaving the screen; the log says so. An app that only announces its minimum
+  after it is up (Steam) is learned the first time it refuses a tile.
 - Log: `%LOCALAPPDATA%\phiwm\phiwm.log` (previous run: `phiwm.old.log`). Every managed window
   is logged with its class and exe, and so is every keybind and workspace switch.
 

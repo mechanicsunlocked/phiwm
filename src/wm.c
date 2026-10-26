@@ -441,15 +441,16 @@ static void read_margins(Win *w)
 }
 
 /* The smallest outer size the app accepts (WM_GETMINMAXINFO), as the visible rect in
- * physical pixels of its monitor. The wait is bounded; a hung app gets no minimum. */
-static void read_min_size(Win *w)
+ * physical pixels of its monitor. The wait is bounded: a busy app leaves the minimum
+ * as it was, and the call returns 0. */
+static int read_min_size(Win *w)
 {
-    w->min_w = w->min_h = 0;
     MINMAXINFO mmi;
     ZeroMemory(&mmi, sizeof mmi);
     DWORD_PTR res = 0;
     if (!SendMessageTimeoutW(w->hwnd, WM_GETMINMAXINFO, 0, (LPARAM)&mmi, SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, &res))
-        return;
+        return 0;
+    w->min_w = w->min_h = 0;
     UINT mdpi = g.mon[mon_from_hwnd(w->hwnd)].dpi;
     UINT wdpi = GetDpiForWindow(w->hwnd);   /* 96 for DPI-unaware apps: Windows scales them up */
     if (!wdpi) wdpi = mdpi;
@@ -459,14 +460,26 @@ static void read_min_size(Win *w)
     /* Windows' own default (a title bar's worth) is not a constraint worth tracking */
     if (mw > GetSystemMetricsForDpi(SM_CXMINTRACK, mdpi)) w->min_w = mw;
     if (mh > GetSystemMetricsForDpi(SM_CYMINTRACK, mdpi)) w->min_h = mh;
+    return 1;
 }
 
-/* Puts the visible part of the window exactly on `v`. With `reveal` the window is
- * also shown in the same call, so it can never be seen at a stale spot first.
+/* Puts the visible part of the window exactly on `v`. A window that cannot shrink to
+ * its tile gets its minimum instead, slid back inside the monitor: it overlaps its
+ * neighbours rather than leaving the screen. With `reveal` the window is also shown
+ * in the same call, so it can never be seen at a stale spot first.
  * Returns 1 if it moved it. */
 static int place(Win *w, PhiRect v, int reveal)
 {
     HWND h = w->hwnd;
+    if (w->min_w > v.w || w->min_h > v.h) {
+        RECT wa = g.mon[g.ws[w->ws].mon].work;
+        if (w->min_w > v.w) v.w = w->min_w;
+        if (w->min_h > v.h) v.h = w->min_h;
+        if (v.x + v.w > wa.right) v.x = wa.right - v.w;
+        if (v.y + v.h > wa.bottom) v.y = wa.bottom - v.h;
+        if (v.x < wa.left) v.x = wa.left;
+        if (v.y < wa.top) v.y = wa.top;
+    }
     w->tile = v;
     if (IsIconic(h)) return 0;
     int zoomed = IsZoomed(h);
@@ -1497,22 +1510,31 @@ static void on_location(Win *w)
     if (ws->fs == w || w->floating || !w->has_placed) return;
     RECT r;
     if (!GetWindowRect(h, &r) || EqualRect(&r, &w->placed)) return;
+    long rw = r.right - r.left, rh = r.bottom - r.top;
+    long pw = w->placed.right - w->placed.left, ph = w->placed.bottom - w->placed.top;
+    if (r.left == w->placed.left && r.top == w->placed.top && (rw > pw || rh > ph)) {
+        /* It stayed put but refused to shrink: a minimum phiwm did not know. Ask again
+         * (Steam sets its minimum only after the window exists); an app that does not
+         * answer in time is taken at its word, the size it kept. */
+        RECT m = w->has_margin ? w->margin : (RECT){ 0, 0, 0, 0 };
+        int mw = w->min_w, mh = w->min_h;
+        if (!read_min_size(w)) {
+            if (rw > pw) w->min_w = (int)rw - m.left - m.right;
+            if (rh > ph) w->min_h = (int)rh - m.top - m.bottom;
+        }
+        if (w->min_w > w->tile.w || w->min_h > w->tile.h) {
+            if (mw == w->min_w && mh == w->min_h) return;
+            phi_log("%p keeps %ldx%ld instead of %ldx%ld: minimum %dx%d", (void *)h, rw, rh, pw, ph, w->min_w, w->min_h);
+            SetTimer(g.msgwnd, T_RETILE, 80, NULL);
+            return;
+        }
+    }
     /* something else moved a tiled window: put it back, but don't fight forever */
     if (w->fix_epoch != g.epoch) { w->fix_epoch = g.epoch; w->fix_count = 0; }
     if (w->fix_count < 4) {
         w->fix_count++;
         SetTimer(g.msgwnd, T_RETILE, 80, NULL);
-        return;
     }
-    if (w->fix_count > 4) return;
-    /* it insists: it has a minimum size we did not know, or one that cannot fit */
-    w->fix_count++;
-    int mw = w->min_w, mh = w->min_h;
-    read_min_size(w);
-    phi_log("%p keeps %ldx%ld instead of %ldx%ld (minimum %dx%d)", (void *)h,
-            (long)(r.right - r.left), (long)(r.bottom - r.top),
-            (long)(w->placed.right - w->placed.left), (long)(w->placed.bottom - w->placed.top), w->min_w, w->min_h);
-    if (mw != w->min_w || mh != w->min_h) SetTimer(g.msgwnd, T_RETILE, 80, NULL);
 }
 
 static void on_drag_end(Win *w)

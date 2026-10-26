@@ -141,11 +141,11 @@ int main(void)
     phi_set_min(b, 600, 100);
     phi_layout(&t, wide, &golden);
     CHECK(a->parent->horiz == 0 && a->box.w == 1000 && b->box.w == 1000 && b->box.y == a->box.h);
-    /* the split stays (locked) and the ratio gives a window its minimum when there is room */
+    /* the split stays (locked) and the ratio is never bent: b is short of its minimum */
     phi_set_min(a, 0, 0);
     phi_set_min(b, 0, 700);
     phi_layout(&t, wide, &golden);
-    CHECK(a->parent->horiz == 0 && b->box.h == 700 && a->box.h == 100);
+    CHECK(a->parent->horiz == 0 && a->box.h == (int)(800 * 0.618 + 0.5) && b->box.h < 700);
     /* no direction fits: the ratio is left alone (the app overflows, phiwm does not jitter) */
     phi_set_min(a, 600, 500);
     phi_set_min(b, 600, 500);
@@ -164,9 +164,9 @@ int main(void)
     phi_layout(&t, wide, &golden);
     CHECK(b->parent->horiz == 0);                 /* b over d in the 382 wide column */
     CHECK(t.root->min_w == 300 && a->box.w + b->box.w == 1000 && b->box.w >= 300 && d->box.w >= 300);
-    phi_set_min(b, 500, 0);                       /* now the column must widen: the root ratio yields */
+    phi_set_min(b, 500, 0);                       /* too wide for the column: the root keeps its ratio */
     phi_layout(&t, wide, &golden);
-    CHECK(b->box.w == 500 && a->box.w == 500);
+    CHECK(b->parent->horiz == 0 && a->box.w == (int)(1000 * 0.618 + 0.5) && b->box.w == 1000 - a->box.w);
     phi_free(&t);
 
     if (fails) { printf("%d failure(s)\n", fails); return 1; }

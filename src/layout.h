@@ -42,8 +42,9 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
 void     phi_remove(PhiTree *t, PhiNode *leaf);
 
 /* The smallest box a leaf accepts (0 = no minimum). A split that cannot hold both
- * children's minimums side by side is stacked instead, and vice versa; when there
- * is room for both, the ratio is clamped so each child gets its minimum. */
+ * children's minimums side by side is stacked instead, and vice versa. The ratio
+ * is never changed for it: a leaf that still does not fit gets a box that is too
+ * small, and the caller decides what to do with the window. */
 void     phi_set_min(PhiNode *leaf, int w, int h);
 
 /* Recompute every node's box inside `area`. */
