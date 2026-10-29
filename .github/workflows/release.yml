@@ -39,7 +39,7 @@ jobs:
           test -f "$ZIP" || { echo "Makefile VERSION does not match tag $GITHUB_REF_NAME"; exit 1; }
           gh release create "$GITHUB_REF_NAME" "$ZIP" --title "phiwm $VERSION" --generate-notes
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/phiwm-${VERSION}-x64.zip"
-          tools/winget-manifests.sh "${GITHUB_REPOSITORY_OWNER}.phiwm" "$VERSION" "$ZIP" "$URL" \
+          sh tools/winget-manifests.sh "${GITHUB_REPOSITORY_OWNER}.phiwm" "$VERSION" "$ZIP" "$URL" \
             "${GITHUB_REPOSITORY_OWNER}" "https://github.com/${GITHUB_REPOSITORY}"
 
       - uses: actions/upload-artifact@v4
