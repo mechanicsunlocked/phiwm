@@ -2,7 +2,8 @@
  *
  * Each workspace owns a binary tree. Leaves hold windows, inner nodes
  * hold a split (side-by-side or stacked) and the share of the first child.
- * New windows split the focused leaf, exactly like Hyprland's dwindle.
+ * A new window halves the least-split leaf, clockwise round the screen
+ * (phi_split_target); a drag & drop names the leaf instead.
  */
 #ifndef PHI_LAYOUT_H
 #define PHI_LAYOUT_H
@@ -34,13 +35,19 @@ typedef struct {
 
 enum { PHI_EDGE_LEFT, PHI_EDGE_RIGHT, PHI_EDGE_TOP, PHI_EDGE_BOTTOM };
 
-/* The leaf a new window splits when none is given: the least-split one, and among
- * those the next one clockwise after the window that was split last. So the screen
- * is halved left|right, then the right half top/bottom, then the left half, then
- * the four quarters in turn. NULL on an empty tree. Boxes must be laid out. */
-PhiNode *phi_split_target(const PhiTree *t, PhiRect area);
+/* The leaf a new window needing (min_w, min_h) splits when none is given: the
+ * least-split one, and among those the next one clockwise after the window that was
+ * split last. So the screen is halved left|right, then the right half top/bottom,
+ * then the left half, then the four quarters in turn. A leaf whose half has no room
+ * (phi_can_split) is passed over for the next one, deeper if need be; when none has
+ * room, the plain least-split clockwise choice is returned, so the caller's own
+ * phi_can_split on the result tells whether the tree can take the window at all.
+ * NULL on an empty tree. Boxes must be laid out. */
+PhiNode *phi_split_target(const PhiTree *t, PhiRect area, const PhiDwindle *cfg,
+                          int min_w, int min_h);
 
-/* Insert `win` by splitting `target` (NULL = phi_split_target). The new window goes
+/* Insert `win` by splitting `target` (NULL = phi_split_target, minimums ignored:
+ * callers that know the window's minimum pick the target themselves). The new window goes
  * right/bottom; `force` >= 0 overrides that: 0 = the side of point (px, py),
  * 1 = new window left/top, 2 = right/bottom. Returns the new leaf, or NULL on
  * allocation failure. */

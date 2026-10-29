@@ -63,13 +63,12 @@ static int cur_ws(void) { return g.nmon ? g.mon[g.cur_mon].ws : 0; }
 
 int wm_focused_ws_number(void) { return cur_ws() + 1; }
 
-static Win *ws_mru(int i, Win *exclude, int tiled_only)
+static Win *ws_mru(int i, Win *exclude)
 {
     Win *best = NULL;
     for (int k = 0; k < g.nwins; k++) {
         Win *w = g.wins[k];
         if (w->ws != i || w == exclude || w->minimized) continue;
-        if (tiled_only && !w->node) continue;
         if (!best || w->focus_stamp > best->focus_stamp) best = w;
     }
     return best;
@@ -522,12 +521,11 @@ static void place_floating_on_monitor(Win *w, int m)
     SetWindowPos(w->hwnd, NULL, x, y, ww, hh, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 }
 
-/* Lays out workspace i. With `reveal`, hidden tiled windows are shown as they are placed. */
-static void apply_ws_ex(int i, int reveal)
+/* Recomputes the boxes of workspace i's tree from the windows' current minimums,
+ * whether the workspace is on screen or not. Returns the area, and the inner gap. */
+static PhiRect ws_layout(int i, int *gap_in)
 {
-    if (!ws_visible(i)) return;
     Workspace *ws = &g.ws[i];
-    Monitor *mo = &g.mon[ws->mon];
     int gin;
     PhiRect area = ws_area(i, &gin);
     for (PhiNode *n = phi_first(&ws->tree); n; n = phi_next(n)) {
@@ -535,6 +533,18 @@ static void apply_ws_ex(int i, int reveal)
         phi_set_min(n, w->min_w ? w->min_w + 2 * gin : 0, w->min_h ? w->min_h + 2 * gin : 0);
     }
     phi_layout(&ws->tree, area, &phi_dwindle);
+    if (gap_in) *gap_in = gin;
+    return area;
+}
+
+/* Lays out workspace i. With `reveal`, hidden tiled windows are shown as they are placed. */
+static void apply_ws_ex(int i, int reveal)
+{
+    if (!ws_visible(i)) return;
+    Workspace *ws = &g.ws[i];
+    Monitor *mo = &g.mon[ws->mon];
+    int gin;
+    PhiRect area = ws_layout(i, &gin);
     for (PhiNode *n = phi_first(&ws->tree); n; n = phi_next(n)) {
         Win *w = n->win;
         if (w == ws->fs) continue;
@@ -665,19 +675,25 @@ static void focus_desktop_on(int m)
 /* ------------------------------------------------------------------ */
 
 /* The leaf a new window on w's workspace splits: a given target (drag & drop), else
- * the layout's choice: the least-split window, clockwise. NULL on an empty workspace. */
-static PhiNode *split_target(Win *w, Win *target_win)
+ * the layout's choice: the least-split window with room for w, clockwise. The tree
+ * is laid out first: a hidden workspace's boxes are stale after a removal. The gap
+ * comes back in *gap_in. NULL on an empty workspace. */
+static PhiNode *split_target(Win *w, Win *target_win, int *gap_in)
 {
     Workspace *ws = &g.ws[w->ws];
+    int gin;
+    PhiRect area = ws_layout(w->ws, &gin);
+    if (gap_in) *gap_in = gin;
     if (target_win && target_win != w && target_win->node && target_win->ws == w->ws) return target_win->node;
-    return phi_split_target(&ws->tree, ws_area(w->ws, NULL));
+    return phi_split_target(&ws->tree, area, &phi_dwindle,
+                            w->min_w ? w->min_w + 2 * gin : 0, w->min_h ? w->min_h + 2 * gin : 0);
 }
 
 static void tile_insert(Win *w, Win *target_win, int force, const POINT *pt)
 {
     Workspace *ws = &g.ws[w->ws];
     if (ws->mon < 0) ws->mon = g.cur_mon;
-    PhiNode *target = split_target(w, target_win);
+    PhiNode *target = split_target(w, target_win, NULL);
     POINT p;
     if (pt) p = *pt; else GetCursorPos(&p);
     PhiRect area = ws_area(w->ws, NULL);
@@ -695,8 +711,8 @@ static int next_empty_ws(int cur)
 }
 
 /* Where a new tiled window on `cur` should open: there, unless the workspace holds
- * PHI_MAX_TILES windows already or the half it would get is too small for it or for
- * the window it splits. Then the next empty workspace takes it (-1: stay). */
+ * PHI_MAX_TILES windows already or no window's half has room for it and for the
+ * window it would split. Then the next empty workspace takes it (-1: stay). */
 static int tile_overflow_ws(int cur, Win *w)
 {
     Workspace *ws = &g.ws[cur];
@@ -705,8 +721,7 @@ static int tile_overflow_ws(int cur, Win *w)
     int full = n >= PHI_MAX_TILES;
     if (!full) {
         int gin;
-        ws_area(cur, &gin);
-        PhiNode *t = split_target(w, NULL);
+        PhiNode *t = split_target(w, NULL, &gin);   /* skips leaves without room: if this one has none, none has */
         full = !phi_can_split(t, &phi_dwindle, w->min_w ? w->min_w + 2 * gin : 0, w->min_h ? w->min_h + 2 * gin : 0);
     }
     return full ? next_empty_ws(cur) : -1;
@@ -850,7 +865,7 @@ static void unmanage(Win *w, int alive)
     free(w);
     structural_change();
 
-    ws->focus = ws_mru(i, NULL, 0);
+    ws->focus = ws_mru(i, NULL);
     if (!ws_visible(i) && ws_is_empty(i)) ws->mon = -1;
     apply_ws(i);
     /* like hyprland: closing a window focuses the next one on the same workspace */
@@ -874,7 +889,7 @@ static void switch_ws(int n, Win *focus)
     if (ws_visible(n)) {
         if (n != before) g.prev_ws = before;
         g.cur_mon = t->mon;
-        Win *f = focus ? focus : t->focus ? t->focus : ws_mru(n, NULL, 0);
+        Win *f = focus ? focus : t->focus ? t->focus : ws_mru(n, NULL);
         if (f) focus_win(f); else focus_desktop_on(t->mon);
         return;
     }
@@ -895,7 +910,7 @@ static void switch_ws(int n, Win *focus)
     for (int k = 0; k < g.nwins; k++) if (g.wins[k]->ws == old) win_hide(g.wins[k]);
     if (old != n && ws_is_empty(old)) g.ws[old].mon = -1;
 
-    Win *f = focus ? focus : t->focus ? t->focus : ws_mru(n, NULL, 0);
+    Win *f = focus ? focus : t->focus ? t->focus : ws_mru(n, NULL);
     if (f) focus_win(f); else focus_desktop_on(m);
     SetTimer(g.msgwnd, T_SETTLE1, 150, NULL);
     save_hidden_list();
@@ -952,7 +967,7 @@ static void move_to_ws(Win *w, int n, int mode, Win *target, const POINT *pt)
     if (!w->floating && !w->minimized) tile_insert(w, target, pt ? 0 : -1, pt);
     d->focus = w;
     w->focus_stamp = ++g.stamp;
-    if (!s->focus) s->focus = ws_mru(src, NULL, 0);
+    if (!s->focus) s->focus = ws_mru(src, NULL);
     structural_change();
 
     if (w->floating && ws_visible(n)) place_floating_on_monitor(w, d->mon);
@@ -1267,7 +1282,7 @@ static void cmd_movefocus(char d)
     int m = mon_in_dir(a ? g.ws[a->ws].mon : g.cur_mon, d);
     if (m < 0) return;
     int ws = g.mon[m].ws;
-    Win *f = g.ws[ws].focus ? g.ws[ws].focus : ws_mru(ws, NULL, 0);
+    Win *f = g.ws[ws].focus ? g.ws[ws].focus : ws_mru(ws, NULL);
     if (f) focus_win(f); else focus_desktop_on(m);
 }
 
@@ -1396,7 +1411,7 @@ static void cmd_focusmonitor(const char *arg)
     else if (arg[0] >= '0' && arg[0] <= '9') m = atoi(arg);
     if (m < 0 || m >= g.nmon) return;
     int ws = g.mon[m].ws;
-    Win *f = g.ws[ws].focus ? g.ws[ws].focus : ws_mru(ws, NULL, 0);
+    Win *f = g.ws[ws].focus ? g.ws[ws].focus : ws_mru(ws, NULL);
     if (f) focus_win(f); else focus_desktop_on(m);
 }
 
@@ -1598,7 +1613,7 @@ static void on_drag_end(Win *w)
         int mi = mon_from_point(c);
         if (ws_visible(w->ws) && mi != g.ws[w->ws].mon) {
             Workspace *s = &g.ws[w->ws];
-            if (s->focus == w) s->focus = ws_mru(w->ws, w, 0);
+            if (s->focus == w) s->focus = ws_mru(w->ws, w);
             if (s->fs == w) fs_clear(s);
             w->ws = g.mon[mi].ws;
             g.ws[w->ws].focus = w;
@@ -1750,7 +1765,7 @@ static void manage_existing(void)
     EnumWindows(scan_cb, (LPARAM)&s);
     /* EnumWindows is top of the z-order first; insert bottom-up so the top window ends up focused */
     for (int i = s.n - 1; i >= 0; i--) manage(s.list[i], 1);
-    for (int m = 0; m < g.nmon; m++) g.ws[g.mon[m].ws].focus = ws_mru(g.mon[m].ws, NULL, 0);
+    for (int m = 0; m < g.nmon; m++) g.ws[g.mon[m].ws].focus = ws_mru(g.mon[m].ws, NULL);
     apply_all();
     Win *fg = win_find(GetForegroundWindow());
     if (fg) { g.ws[fg->ws].focus = fg; g.cur_mon = g.ws[fg->ws].mon >= 0 ? g.ws[fg->ws].mon : g.cur_mon; mark_active(fg); }

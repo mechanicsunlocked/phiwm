@@ -147,22 +147,38 @@ static int depth_of(const PhiNode *n)
     return d;
 }
 
-PhiNode *phi_split_target(const PhiTree *t, PhiRect area)
+/* The leaf at depth `d` that is next clockwise after t->last (wrapping round), among
+ * those with room for the window when `cfg` is given. NULL if there is none. */
+static PhiNode *clockwise_at(const PhiTree *t, PhiRect area, int d,
+                             const PhiDwindle *cfg, int min_w, int min_h)
 {
-    int min_d = -1;
-    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) {
-        int d = depth_of(n);
-        if (min_d < 0 || d < min_d) min_d = d;
-    }
     PhiNode *next = NULL, *wrap = NULL;
     double na = 0, wa = 0;
     for (PhiNode *n = phi_first(t); n; n = phi_next(n)) {
-        if (depth_of(n) != min_d) continue;
+        if (depth_of(n) != d) continue;
+        if (cfg && !phi_can_split(n, cfg, min_w, min_h)) continue;
         double a = clock_pos(n->box, area);
         if (a > t->last + 1e-9 && (!next || a < na)) { next = n; na = a; }
         if (!wrap || a < wa) { wrap = n; wa = a; }
     }
     return next ? next : wrap;
+}
+
+PhiNode *phi_split_target(const PhiTree *t, PhiRect area, const PhiDwindle *cfg,
+                          int min_w, int min_h)
+{
+    int min_d = -1, max_d = -1;
+    for (PhiNode *n = phi_first(t); n; n = phi_next(n)) {
+        int d = depth_of(n);
+        if (min_d < 0 || d < min_d) min_d = d;
+        if (d > max_d) max_d = d;
+    }
+    if (min_d < 0) return NULL;
+    for (int d = min_d; d <= max_d; d++) {   /* least split first, skipping full ones */
+        PhiNode *n = clockwise_at(t, area, d, cfg, min_w, min_h);
+        if (n) return n;
+    }
+    return clockwise_at(t, area, min_d, NULL, 0, 0);   /* nothing has room: the plain choice */
 }
 
 PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
@@ -174,7 +190,7 @@ PhiNode *phi_insert(PhiTree *t, PhiNode *target, void *win, PhiRect area,
     if (!t->root) { t->root = leaf; leaf->box = area; return leaf; }
 
     phi_layout(t, area, cfg);
-    if (!target || !is_leaf(target)) target = phi_split_target(t, area);
+    if (!target || !is_leaf(target)) target = phi_split_target(t, area, NULL, 0, 0);
 
     PhiNode *split = calloc(1, sizeof *split);
     if (!split) { free(leaf); return NULL; }
@@ -209,7 +225,7 @@ void phi_remove(PhiTree *t, PhiNode *leaf)
     if (!leaf) return;
     PhiNode *p = leaf->parent;
     if (!p) {
-        if (t->root == leaf) t->root = NULL;
+        if (t->root == leaf) { t->root = NULL; t->last = 0; }   /* empty again: start over */
         free(leaf);
         return;
     }
@@ -318,4 +334,5 @@ void phi_free(PhiTree *t)
 {
     free_node(t->root);
     t->root = NULL;
+    t->last = 0;
 }

@@ -18,12 +18,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "phiwm"
             VALUE "FileDescription",  "phiwm - dwindle tiling window manager"
-            VALUE "FileVersion",      "0.3.1"
+            VALUE "FileVersion",      "0.3.2"
             VALUE "InternalName",     "phiwm"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "phiwm.exe"
             VALUE "ProductName",      "phiwm"
-            VALUE "ProductVersion",   "0.3.1"
+            VALUE "ProductVersion",   "0.3.2"
         END
     END
     BLOCK "VarFileInfo"

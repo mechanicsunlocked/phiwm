@@ -79,9 +79,10 @@ Workspace arguments: `3`, `+1`, `-1`, `e+1`, `e-1`, `previous`, `empty`.
 - A split is half and half, or what you dragged it to, and never bends to what sits
   inside. The layout does know each app's minimum size (Windows Terminal wants about 100
   columns): two windows that cannot sit side by side are stacked instead.
-- A workspace takes new windows only while they fit. When the focused window's half would
-  be too small for it or for the newcomer, or the workspace already holds 8 windows, the
-  new window opens on the next empty workspace and you follow it. An app that announces
+- A workspace takes new windows only while they fit. A window whose half would be too
+  small for it or for the newcomer is passed over for the next one clockwise. When no
+  window has room, or the workspace already holds 8 windows, the new window opens on the
+  next empty workspace and you follow it. An app that announces
   its minimum only after it is up (Steam wants 2020x1200 px at 200%) is caught the moment
   it refuses its tile and moved the same way. A window that cannot fit and has nowhere to
   go keeps its minimum, slid back inside the monitor; the log says so.

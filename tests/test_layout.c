@@ -190,6 +190,27 @@ int main(void)
     CHECK(!phi_can_split(a, &half, 600, 0));      /* a itself is too tall to stack */
     CHECK(phi_can_split(NULL, &half, 9999, 9999));
     phi_free(&t);
+    CHECK(t.last == 0);                           /* a freed tree starts over */
+
+    /* a window without room is passed over: 1 | (2 / 3), 1 too wide to halve */
+    a = phi_insert(&t, NULL, (void *)1, area, &half, -1, 0, 0);
+    b = phi_insert(&t, NULL, (void *)2, area, &half, -1, 0, 0);
+    PhiNode *c3 = phi_insert(&t, NULL, (void *)3, area, &half, -1, 0, 0);
+    phi_layout(&t, area, &half);
+    CHECK(phi_split_target(&t, area, &half, 0, 0) == a);          /* least split: the left half */
+    phi_set_min(a, 1400, 0);
+    phi_layout(&t, area, &half);
+    CHECK(!phi_can_split(a, &half, 0, 0));
+    CHECK(phi_split_target(&t, area, &half, 0, 0) == c3);         /* next clockwise with room */
+    CHECK(phi_split_target(&t, area, NULL, 0, 0) == a);           /* minimums ignored */
+    CHECK(phi_split_target(&t, area, &half, 0, 9999) == a);       /* nothing has room: the plain choice */
+    CHECK(!phi_can_split(phi_split_target(&t, area, &half, 0, 9999), &half, 0, 9999));
+    phi_remove(&t, c3);
+    phi_remove(&t, b);
+    CHECK(t.last != 0);
+    phi_remove(&t, a);
+    CHECK(t.root == NULL && t.last == 0);         /* emptied by removals: starts over too */
+    CHECK(phi_split_target(&t, area, &half, 0, 0) == NULL);
 
     if (fails) { printf("%d failure(s)\n", fails); return 1; }
     printf("layout: all tests passed\n");
